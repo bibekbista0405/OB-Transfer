@@ -1,0 +1,256 @@
+@import "tailwindcss";
+
+@theme {
+  --color-accent: #00ff9c;
+  --color-bg: #0a0f1c;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-white overflow-x-hidden;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+  }
+  
+  .shimmer-bg {
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(0, 255, 156, 0.1) 50%,
+        transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite linear;
+  }
+}
+
+@keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+}
+
+@keyframes slide-up {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+    animation: slide-up 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes reveal {
+    from { opacity: 0; transform: scale(0.95); filter: blur(10px); }
+    to { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+
+.animate-revealer {
+    animation: reveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.file-card {
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.file-card:hover {
+    transform: translateY(-8px) scale(1.02);
+    @apply bg-white/10 border-accent/30;
+    box-shadow: 0 20px 40px -20px rgba(0, 255, 156, 0.2);
+}
+
+.point {
+    @apply absolute w-[2px] h-[2px] bg-accent rounded-full opacity-30 pointer-events-none;
+}
+
+.toast-item {
+    animation: toast-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes toast-in {
+    from { transform: translateX(100%) scale(0.8); opacity: 0; }
+    to { transform: translateX(0) scale(1); opacity: 1; }
+}
+
+@keyframes queue-item-enter {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.queue-item {
+    transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.progress-bar-inner {
+    transition: width 0.4s ease;
+    background: linear-gradient(90deg, #00ff9c, #00d4ff);
+}
+
+.progress-bar-inner.shimmering {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(90deg, #00ff9c, #00d4ff);
+    box-shadow: 0 0 15px rgba(0, 255, 156, 0.4);
+}
+
+.progress-bar-inner.shimmering::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.4),
+        transparent
+    );
+    animation: bar-shimmer 1.2s infinite linear;
+}
+
+.progress-bar-inner.progress-success {
+    background: #00ff9c;
+    box-shadow: 0 0 15px rgba(0, 255, 156, 0.6);
+    animation: bar-success-glow 2s infinite alternate cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes bar-success-glow {
+    0% { filter: brightness(1) drop-shadow(0 0 5px rgba(0,255,156,0.4)); }
+    100% { filter: brightness(1.2) drop-shadow(0 0 12px rgba(0,255,156,0.8)); }
+}
+
+.success-glow {
+    animation: success-pulse 4s infinite alternate ease-in-out;
+}
+
+/* Cinematic Preview Styles */
+.media-preview-image {
+    @apply max-w-full max-h-[85vh] object-contain transition-transform duration-700 ease-out scale-95;
+}
+
+#previewModal.active .media-preview-image {
+    @apply scale-100;
+}
+
+.visualizer-container {
+    @apply flex items-end justify-center gap-1 h-32 w-full max-w-md mx-auto;
+}
+
+.visualizer-bar {
+    @apply w-1 bg-[#00ff9c] rounded-full transition-all duration-100;
+    min-height: 4px;
+}
+
+.audio-card {
+    @apply bg-black/40 border border-white/5 p-8 rounded-[2rem] w-full max-w-md flex flex-col items-center gap-8;
+}
+
+audio::-webkit-media-controls-panel {
+    @apply bg-white/10 backdrop-blur-xl border border-white/10;
+}
+
+video::-webkit-media-controls-panel {
+    @apply bg-gradient-to-t from-black/80 to-transparent;
+}
+
+.zoom-blur-bg {
+    @apply absolute inset-0 bg-center bg-cover opacity-30 blur-3xl scale-110 pointer-events-none;
+}
+
+@keyframes success-pulse {
+    0% { 
+        box-shadow: 0 10px 20px -10px rgba(0, 255, 156, 0.2);
+        border-color: rgba(0, 255, 156, 0.3);
+        background: rgba(0, 255, 156, 0.03);
+    }
+    100% { 
+        box-shadow: 0 0 30px 5px rgba(0, 255, 156, 0.4);
+        border-color: rgba(0, 255, 156, 0.8);
+        background: rgba(0, 255, 156, 0.08);
+    }
+}
+
+@keyframes bar-shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+}
+
+.view-panel {
+    @apply min-h-[60vh] transition-all duration-300;
+}
+
+.view-panel.hidden {
+    display: none !important;
+}
+
+.nav-item {
+    @apply transition-all duration-300 active:scale-90;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full;
+}
+
+.mobile-card {
+    @apply bg-white/5 border border-white/5 rounded-3xl p-4 active:scale-[0.98] transition-all duration-300;
+}
+
+.mobile-card.active {
+    @apply border-[#00ff9c]/30 shadow-[0_10px_20px_-10px_rgba(0,255,156,0.1)];
+}
+
+.shimmer-text {
+    background: linear-gradient(90deg, #666, #fff, #666);
+    background-size: 200% 100%;
+    animation: shimmer-text 2s infinite linear;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+@keyframes shimmer-text {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+#previewModal.active #modalBackdrop {
+    @apply opacity-100;
+}
+
+#previewModal.active #modalContent {
+    @apply opacity-100 translate-y-0;
+}
+
+video.nebula-player {
+    @apply w-full max-h-[80vh] rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] outline-none;
+}
+
+.visualizer {
+    @apply flex items-center gap-1 h-10;
+}
+
+.vis-bar {
+    @apply w-1 h-full bg-accent rounded-sm;
+    animation: vis-wave 1s ease-in-out infinite;
+}
+
+@keyframes vis-wave {
+    0%, 100% { transform: scaleY(0.3); }
+    50% { transform: scaleY(1); }
+}
