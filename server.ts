@@ -130,15 +130,52 @@ async function start() {
     socket.on('disconnect', () => app.log.info({ socketId: socket.id }, 'Realtime client disconnected'));
   });
 
-  // Authentication hook. Protected API requests require a server-side session.
-  app.addHook('preHandler', async (request, reply) => {
+  // API authorization boundary. Only the authentication bootstrap endpoints are public;
+  // every other /api route requires a valid server-side session. This deny-by-default
+  // policy prevents newly-added API routes from accidentally becoming public.
+  const PUBLIC_API_ROUTES = new Set(['/api/auth', '/api/auth/session']);
+
+  const requireApiAuth = async (request: any, reply: any) => {
     const url = request.url.split('?')[0];
-    if (!url.startsWith('/api') || url === '/api/auth' || url === '/api/auth/session') return;
+    if (!url.startsWith('/api') || PUBLIC_API_ROUTES.has(url)) return;
+
     const session = getSession(request);
     if (!session.authenticated) {
-      return reply.code(401).send({ error: 'Authentication required' });
+      reply.header('Cache-Control', 'no-store');
+      return reply.code(401).send({
+        error: 'UNAUTHORIZED',
+        message: 'Authentication required'
+      });
+    }
+
+    // Make the authorization result available to route handlers without exposing
+    // the session identifier to application code or the client.
+    request.authenticated = true;
+  };
+
+  app.addHook('preHandler', requireApiAuth);
+
+  // Protected API responses contain private file metadata/content. Never allow
+  // an intermediary/browser cache to retain them beyond the active request.
+  app.addHook('onSend', async (request, reply) => {
+    const url = request.url.split('?')[0];
+    if (url.startsWith('/api') && !PUBLIC_API_ROUTES.has(url)) {
+      reply.header('Cache-Control', 'private, no-store');
+      reply.header('Pragma', 'no-cache');
     }
   });
+
+  const isValidFileId = (value: unknown) =>
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+  const requireValidFileId = (request: any, reply: any) => {
+    const { id } = request.params as { id?: unknown };
+    if (!isValidFileId(id)) {
+      reply.code(400).send({ error: 'INVALID_FILE_ID', message: 'Invalid file identifier' });
+      return false;
+    }
+    return true;
+  };
 
   // --- API ROUTES ---
 
@@ -164,8 +201,9 @@ async function start() {
   });
 
   app.post('/api/auth/logout', async (request, reply) => {
-    const sessionId = parseCookies(request.headers.cookie)[SESSION_COOKIE];
-    if (sessionId) sessions.delete(sessionId);
+    const session = getSession(request);
+    const sessionId = session.sessionId;
+    if (session.authenticated && sessionId) sessions.delete(sessionId);
     clearSessionCookie(reply);
     return { success: true };
   });
@@ -270,6 +308,7 @@ async function start() {
   });
 
   app.get('/api/files/:id/download', async (request, reply) => {
+    if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
     const metadataPath = path.join(METADATA_DIR, `${id}.json`);
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
@@ -287,6 +326,7 @@ async function start() {
   });
 
   app.get('/api/files/:id/view', async (request, reply) => {
+    if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
     const metadataPath = path.join(METADATA_DIR, `${id}.json`);
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
@@ -319,6 +359,7 @@ async function start() {
   });
 
   app.delete('/api/files/:id', async (request, reply) => {
+    if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
     const metadataPath = path.join(METADATA_DIR, `${id}.json`);
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
