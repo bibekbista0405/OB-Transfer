@@ -1,0 +1,8 @@
+{
+  "name": "OB Transfer",
+  "description": "High-performance real-time file transfer and media streaming platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

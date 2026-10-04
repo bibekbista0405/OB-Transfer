@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OB Transfer | Next-Gen File Transfer</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/style.css">
+</head>
+<body class="bg-[#0a0f1c] text-white font-['Space_Grotesk'] overflow-x-hidden min-h-screen">
+    
+    <!-- Background Effects -->
+    <div class="fixed inset-0 pointer-events-none z-[-1]">
+        <div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/20 rounded-full blur-[120px] animate-pulse"></div>
+        <div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] animate-pulse" style="animation-delay: 2s;"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-[radial-gradient(circle_at_center,rgba(0,255,156,0.05)_0%,transparent_70%)]"></div>
+        <div class="particles-container absolute inset-0"></div>
+    </div>
+
+    <!-- Global Drag Drop Overlay -->
+    <div id="dragDropOverlay" class="fixed inset-0 bg-[#0a0f1c]/80 backdrop-blur-sm z-[150] flex flex-col items-center justify-center opacity-0 pointer-events-none transition-all duration-300">
+        <div class="w-[90%] max-w-2xl h-[400px] rounded-3xl border-2 border-dashed border-[#00ff9c]/50 bg-[#00ff9c]/5 flex flex-col items-center justify-center scale-95 transition-transform duration-300 shadow-[0_0_50px_rgba(0,255,156,0.1)]" id="dragDropContent">
+            <div class="w-24 h-24 bg-[#00ff9c]/20 rounded-full flex items-center justify-center mb-6 animate-bounce shadow-[0_0_30px_rgba(0,255,156,0.2)]">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 text-[#00ff9c]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+            </div>
+            <h2 class="text-3xl font-black text-white tracking-widest uppercase">Drop Assets Here</h2>
+            <p class="text-[#00ff9c]/70 mt-2 font-mono tracking-widest uppercase text-sm">Initiate Uplink Protocol</p>
+        </div>
+    </div>
+
+    <!-- Auth Overlay (Password Protected) -->
+    <div id="authOverlay" class="fixed inset-0 bg-[#0a0f1c]/95 backdrop-blur-xl z-[100] flex items-center justify-center hidden">
+        <div class="max-w-md w-full p-8 rounded-3xl bg-white/5 border border-white/10 glass-panel animate-revealer">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-[#00ff9c]/20 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-[#00ff9c]/30 shadow-[0_0_20px_rgba(0,255,156,0.2)]">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-[#00ff9c]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                </div>
+                <h2 class="text-2xl font-bold tracking-tight">Encrypted Access</h2>
+                <p class="text-gray-400 mt-2">Enter the access key to enter OB Transfer.</p>
+            </div>
+            <form id="authForm" class="space-y-4">
+                <input type="password" id="accessKey" placeholder="••••••••" class="w-full bg-black/40 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00ff9c] focus:ring-1 focus:ring-[#00ff9c] outline-none transition-all placeholder:text-gray-600">
+                <button type="submit" class="w-full bg-[#00ff9c] text-black font-bold py-4 rounded-xl hover:bg-[#00ff9c]/90 active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(0,255,156,0.3)]">Decrypt Access</button>
+            </form>
+            <p id="authError" class="text-red-400 text-sm mt-4 text-center hidden">Access denied. Verification failed.</p>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header id="dropZone" class="sticky top-0 z-50 bg-[#0a0f1c]/80 backdrop-blur-xl border-b border-white/5 px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <div class="w-8 h-8 bg-[#00ff9c] rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(0,255,156,0.3)]">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+            </div>
+            <div class="flex flex-col justify-center translate-y-0.5">
+                <h1 class="text-lg font-black tracking-tighter leading-none mb-0.5">OB Transfer</h1>
+                <span class="text-[7px] text-gray-500 font-mono tracking-[0.15em] uppercase leading-none">by bibekbista with Oli production</span>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-3">
+            <div class="flex flex-col items-end">
+                <div class="flex items-center gap-1.5">
+                    <span id="socketStatus" class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                    <span id="socketText" class="text-[9px] uppercase tracking-widest text-gray-500 font-bold">Offline</span>
+                </div>
+            </div>
+            <div class="w-9 h-9 bg-white/5 border border-white/10 rounded-full flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+            </div>
+        </div>
+    </header>
+
+    <main class="pb-32">
+        <!-- View: Explorer (Default) -->
+        <div id="view-explorer" class="view-panel transition-all duration-500 px-6 pt-8">
+            <div class="mb-8 flex items-center justify-between">
+                <div>
+                    <h2 class="text-3xl font-bold tracking-tight uppercase">Dashboard</h2>
+                    <p class="text-gray-500 text-xs mt-1">Real-time node synchronization.</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button class="p-2 bg-white/5 rounded-xl border border-white/10 text-gray-400">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div id="fileList" class="grid grid-cols-1 gap-4">
+                <!-- File cards will be injected here -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="hidden flex flex-col items-center justify-center py-20 text-center gap-6 glass-panel rounded-[2.5rem] border border-white/5 mt-4">
+                <div class="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center animate-bounce">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="text-xl font-bold">No Records Found</h3>
+                    <p class="text-gray-500 max-w-[200px] mx-auto mt-2 text-xs">The OB Transfer@ core is empty. Deploy assets to start.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- View: Transfers -->
+        <div id="view-transfers" class="view-panel hidden transition-all duration-500 px-6 pt-8">
+            <div class="mb-8 flex items-center justify-between">
+                <div>
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="w-2 h-8 bg-gradient-to-b from-[#00ff9c] to-cyan-500 rounded-full"></div>
+                        <h2 class="text-3xl font-black tracking-tight uppercase bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-500">Transfers</h2>
+                    </div>
+                    <p class="text-gray-500 text-xs font-mono tracking-widest uppercase ml-5">Active Operations & Queue</p>
+                </div>
+                <div class="flex gap-3">
+                    <button id="startAllBtn" class="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-900/40 to-[#00ff9c]/10 text-cyan-50 border border-cyan-500/30 rounded-2xl hover:border-[#00ff9c]/50 hover:shadow-[0_0_20px_rgba(0,255,156,0.2)] transition-all group overflow-hidden relative">
+                        <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                        <span class="text-[10px] font-black uppercase tracking-widest text-[#00ff9c] group-hover:text-white transition-colors relative z-10">Start All</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-[#00ff9c] group-hover:text-white transition-colors relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                        </svg>
+                    </button>
+                    <button id="clearQueueBtn" class="flex items-center justify-center w-10 h-10 bg-red-900/20 text-red-400 border border-red-500/20 rounded-2xl hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/40 transition-all flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div id="uploadQueue" class="flex flex-col gap-5">
+                <!-- Queue items will be injected here -->
+            </div>
+
+            <div id="queueEmptyState" class="flex flex-col items-center justify-center py-24 text-center gap-8 glass-panel rounded-[3rem] border border-white/5 mt-4 transition-all duration-700 animate-slide-up relative overflow-hidden">
+                <div class="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none"></div>
+                <div class="relative w-24 h-24 bg-white/5 rounded-[2rem] border border-white/10 flex items-center justify-center shadow-inner group-hover:scale-110 transition-transform">
+                    <div class="absolute inset-0 bg-[#00ff9c]/10 rounded-[2rem] blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 text-gray-500 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <!-- subtle orbiting dot -->
+                    <div class="absolute w-2 h-2 bg-[#00ff9c]/50 rounded-full blur-[1px] animate-[spin_3s_linear_infinite]" style="top: 0; left: 50%; transform-origin: 0 48px;"></div>
+                </div>
+                <div class="relative z-10">
+                    <h3 class="text-2xl font-black tracking-tight text-white/50 uppercase">Queue Idle</h3>
+                    <p class="text-gray-500 max-w-[250px] mx-auto mt-3 text-xs opacity-60 leading-relaxed font-mono tracking-widest">Awaiting uplink instructions. Initiate transfer or drop assets here.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- FAB -->
+    <div class="fixed bottom-24 right-6 z-40">
+        <button id="fabBtn" class="w-16 h-16 bg-[#00ff9c] text-black rounded-2xl flex items-center justify-center shadow-[0_10px_30px_rgba(0,255,156,0.4)] active:scale-90 transition-all border-4 border-[#0a0f1c]">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4" />
+            </svg>
+        </button>
+        <input type="file" id="fileInput" multiple class="hidden">
+    </div>
+
+    <!-- Bottom Navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 z-50 bg-[#0a0f1c]/90 backdrop-blur-2xl border-t border-white/5 px-8 pt-4 pb-8 flex items-center justify-around">
+        <button id="nav-explorer" class="nav-item group flex flex-col items-center gap-1.5 text-[#00ff9c]">
+            <div class="nav-icon relative">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 p-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <div class="nav-indicator absolute -bottom-1 left-1/2 -translateX-1/2 w-1 h-1 bg-[#00ff9c] rounded-full hidden group-active:block"></div>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-widest">Explorer</span>
+        </button>
+        
+        <div class="w-16"></div> <!-- Spacer for FAB -->
+
+        <button id="nav-transfers" class="nav-item group flex flex-col items-center gap-1.5 text-gray-500">
+            <div class="nav-icon relative">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 p-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <div id="transferCount" class="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] font-black rounded-full flex items-center justify-center hidden">0</div>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-widest">Transfers</span>
+        </button>
+    </nav>
+
+    <!-- Preview Modal -->
+    <div id="previewModal" class="fixed inset-0 z-[200] hidden flex items-center justify-center p-6 md:p-12">
+        <div id="modalBackdrop" class="absolute inset-0 bg-black/90 backdrop-blur-2xl transition-opacity duration-700 opacity-0"></div>
+        <div id="modalContent" class="relative max-w-6xl w-full max-h-full overflow-y-auto bg-[#0f172a] rounded-[2.5rem] border border-white/10 shadow-2xl transition-all duration-700 translate-y-12 opacity-0 flex flex-col md:flex-row overflow-hidden group/modal">
+            
+            <!-- Media Panel -->
+            <div class="md:w-[65%] bg-black flex items-center justify-center relative min-h-[300px] md:min-h-[500px]">
+                <div id="mediaContainer" class="w-full h-full flex items-center justify-center">
+                    <!-- Media element injected here -->
+                </div>
+                <button id="closeModalBtn" class="absolute top-6 left-6 p-3 bg-black/40 hover:bg-black/60 rounded-2xl border border-white/10 transition-all md:opacity-0 md:group-hover/modal:opacity-100">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Details Panel -->
+            <div class="md:w-[35%] p-10 flex flex-col justify-between bg-white/5 glass-panel">
+                <div class="space-y-6">
+                    <div>
+                        <span id="previewMime" class="px-3 py-1 bg-[#00ff9c]/20 text-[#00ff9c] text-[10px] font-bold rounded-lg border border-[#00ff9c]/20 uppercase tracking-widest">VIDEO/MP4</span>
+                        <h2 id="previewName" class="text-2xl font-bold mt-4 leading-tight break-words">Project_Alpha_Stream.mp4</h2>
+                        <div class="flex items-center gap-4 mt-4 text-gray-400 text-sm">
+                            <span id="previewSize" class="font-mono">1.2 GB</span>
+                            <span class="w-1 h-1 rounded-full bg-gray-600"></span>
+                            <span id="previewDate" class="font-mono uppercase">May 17, 2026</span>
+                        </div>
+                    </div>
+
+                    <div class="p-6 rounded-2xl bg-black/40 border border-white/5 space-y-4">
+                        <h3 class="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">Metadata Signature</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <p class="text-[10px] text-gray-500 uppercase">ID</p>
+                                <p id="previewId" class="text-xs truncate font-mono text-gray-300">fb29-4a12-8821</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] text-gray-500 uppercase">Extension</p>
+                                <p id="previewExt" class="text-xs font-mono text-gray-300 uppercase">.MP4</p>
+                            </div>
+                            <div class="col-span-2">
+                                <p class="text-[10px] text-gray-500 uppercase">Stored As</p>
+                                <p id="previewStoredName" class="text-[10px] font-mono text-gray-500 truncate mt-1">1734...by-bibek.mp4</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-10 flex flex-col gap-4">
+                    <a id="downloadBtn" href="#" download class="w-full py-4 bg-white text-black rounded-2xl font-bold text-center hover:bg-gray-200 transition-colors shadow-xl uppercase">Download Archive</a>
+                    <button id="deleteBtn" class="w-full py-4 bg-red-500/10 text-red-500 border border-red-500/20 rounded-2xl font-bold hover:bg-red-500/20 transition-colors uppercase">Purge From System</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Registry -->
+    <div id="toastRegistry" class="fixed bottom-8 right-8 z-[300] space-y-4 pointer-events-none">
+        <!-- Toasts injected here -->
+    </div>
+
+    <script type="module" src="/src/app.js"></script>
+</body>
+</html>
