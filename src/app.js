@@ -7,7 +7,7 @@ import confetti from 'canvas-confetti';
 // --- Global Constants ---
 const MAX_CONCURRENT_UPLOADS = 3;
 const MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
-let ACCESS_PASSWORD = localStorage.getItem('nebula_access_key') || '';
+
 
 // --- State Management ---
 const state = {
@@ -51,37 +51,51 @@ const el = {
 
 // --- Initialization ---
 function init() {
-    setupSocket();
     setupEventListeners();
-    fetchFiles();
     createParticles();
     checkAuth();
 }
 
 // --- Authentication ---
-function checkAuth() {
-    if (ACCESS_PASSWORD) {
-        // Overlay will be hidden by login logic or remained hidden by default
+async function checkAuth() {
+    try {
+        const response = await fetch('/api/auth/session', {
+            credentials: 'same-origin'
+        });
+
+        if (response.ok) {
+            el.authOverlay.classList.add('hidden');
+            setupSocket();
+            await fetchFiles();
+            return;
+        }
+
+        el.authOverlay.classList.remove('hidden');
+    } catch (err) {
+        el.authOverlay.classList.remove('hidden');
+        showToast('SYSTEM ERROR', 'Authentication server unreachable.', 'error');
     }
 }
 
 async function handleLogin(e) {
     if (e) e.preventDefault();
     const password = el.accessKey.value;
-    
+    el.authError.classList.add('hidden');
+
     try {
         const response = await fetch('/api/auth', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
             body: JSON.stringify({ password })
         });
-        
+
         if (response.ok) {
-            ACCESS_PASSWORD = password;
-            localStorage.setItem('nebula_access_key', password);
+            el.accessKey.value = '';
             el.authOverlay.classList.add('hidden');
-            showToast('ACCESS GRANTED', 'Encryption keys verified.', 'success');
-            fetchFiles();
+            showToast('ACCESS GRANTED', 'Secure session established.', 'success');
+            setupSocket();
+            await fetchFiles();
         } else {
             el.authError.classList.remove('hidden');
             el.accessKey.value = '';
@@ -104,6 +118,13 @@ function setupSocket() {
         el.socketText.className = 'text-[10px] uppercase tracking-widest text-[#00ff9c]';
     });
     
+    state.socket.on('connect_error', (error) => {
+        if (error && error.message === 'Unauthorized') {
+            el.authOverlay.classList.remove('hidden');
+            showToast('SESSION EXPIRED', 'Please authenticate again.', 'warning');
+        }
+    });
+
     state.socket.on('disconnect', () => {
         el.socketStatus.style.backgroundColor = '#ef4444';
         el.socketStatus.classList.remove('bg-[#00ff9c]');
@@ -148,9 +169,7 @@ function switchView(view) {
 
 async function fetchFiles() {
     try {
-        const res = await fetch(`/api/files?auth=${ACCESS_PASSWORD}`, {
-            headers: { 'x-access-password': ACCESS_PASSWORD }
-        });
+        const res = await fetch('/api/files', { credentials: 'same-origin' });
         
         if (res.status === 401) {
             el.authOverlay.classList.remove('hidden');
@@ -543,8 +562,7 @@ function uploadFile(item) {
         processQueue();
     }
 
-    xhr.open('POST', `/api/upload?auth=${ACCESS_PASSWORD}`);
-    xhr.setRequestHeader('x-access-password', ACCESS_PASSWORD);
+    xhr.open('POST', '/api/upload');
     xhr.send(formData);
 }
 
@@ -575,8 +593,8 @@ function openPreview(file) {
     document.getElementById('previewId').textContent = file.id;
     document.getElementById('previewStoredName').textContent = file.storedName;
 
-    const viewUrl = `/api/files/${file.id}/view?auth=${ACCESS_PASSWORD}`;
-    const downloadUrl = `/api/files/${file.id}/download?auth=${ACCESS_PASSWORD}`;
+    const viewUrl = `/api/files/${file.id}/view`;
+    const downloadUrl = `/api/files/${file.id}/download`;
     
     document.getElementById('downloadBtn').href = downloadUrl;
     document.getElementById('deleteBtn').onclick = () => deleteFile(file.id);
@@ -697,7 +715,7 @@ async function deleteFile(id) {
     try {
         const res = await fetch(`/api/files/${id}`, {
             method: 'DELETE',
-            headers: { 'x-access-password': ACCESS_PASSWORD }
+            credentials: 'same-origin'
         });
         
         if (res.ok) {

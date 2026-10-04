@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
+import { randomBytes, timingSafeEqual } from 'crypto';
 
 dotenv.config();
 
@@ -49,44 +50,127 @@ async function start() {
     }
   });
 
+  // --- Authentication / Sessions ---
+  const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
+  const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+  const SESSION_COOKIE = 'ob_transfer_session';
+  const sessions = new Map<string, { createdAt: number; lastSeenAt: number }>();
+  const isProduction = process.env.NODE_ENV === 'production';
+  const sessionCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [sessionId, session] of sessions) {
+      if (now - session.lastSeenAt > SESSION_TTL_MS) sessions.delete(sessionId);
+    }
+  }, 15 * 60 * 1000);
+  sessionCleanupTimer.unref();
+
+  const parseCookies = (header?: string) => {
+    const cookies: Record<string, string> = {};
+    for (const part of (header || '').split(';')) {
+      const [key, ...valueParts] = part.trim().split('=');
+      if (!key) continue;
+      cookies[key] = decodeURIComponent(valueParts.join('='));
+    }
+    return cookies;
+  };
+
+  const getSession = (request: any) => {
+    if (!ACCESS_PASSWORD) return { authenticated: true, sessionId: null };
+    const sessionId = parseCookies(request.headers.cookie)[SESSION_COOKIE];
+    if (!sessionId) return { authenticated: false, sessionId: null };
+
+    const session = sessions.get(sessionId);
+    if (!session || Date.now() - session.lastSeenAt > SESSION_TTL_MS) {
+      sessions.delete(sessionId);
+      return { authenticated: false, sessionId };
+    }
+
+    session.lastSeenAt = Date.now();
+    return { authenticated: true, sessionId };
+  };
+
+  const setSessionCookie = (reply: any, sessionId: string) => {
+    const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+    const secure = isProduction ? '; Secure' : '';
+    reply.header('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`);
+  };
+
+  const clearSessionCookie = (reply: any) => {
+    reply.header('Set-Cookie', `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${isProduction ? '; Secure' : ''}`);
+  };
+
+  const passwordsMatch = (candidate: unknown) => {
+    if (typeof candidate !== 'string' || typeof ACCESS_PASSWORD !== 'string') return false;
+    const candidateBuffer = Buffer.from(candidate);
+    const expectedBuffer = Buffer.from(ACCESS_PASSWORD);
+    return candidateBuffer.length === expectedBuffer.length && timingSafeEqual(candidateBuffer, expectedBuffer);
+  };
+
   // Socket.io
   const io = new Server(app.server, {
-    cors: { origin: '*' }
+    cors: { origin: process.env.APP_URL || 'http://localhost:3000' }
+  });
+
+  io.use((socket, next) => {
+    if (!ACCESS_PASSWORD) return next();
+    const cookies = parseCookies(socket.handshake.headers.cookie);
+    const sessionId = cookies[SESSION_COOKIE];
+    const session = sessionId ? sessions.get(sessionId) : undefined;
+    if (!session || Date.now() - session.lastSeenAt > SESSION_TTL_MS) {
+      if (sessionId) sessions.delete(sessionId);
+      return next(new Error('Unauthorized'));
+    }
+    session.lastSeenAt = Date.now();
+    next();
   });
 
   io.on('connection', (socket) => {
-    console.log('Node connected:', socket.id);
+    app.log.info({ socketId: socket.id }, 'Authenticated realtime client connected');
     socket.emit('status', { connected: true });
-    socket.on('disconnect', () => console.log('Node disconnected'));
+    socket.on('disconnect', () => app.log.info({ socketId: socket.id }, 'Realtime client disconnected'));
   });
 
-  // Auth Hook
-  const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
+  // Authentication hook. Protected API requests require a server-side session.
   app.addHook('preHandler', async (request, reply) => {
-    const url = request.url;
-    // Skip auth for API Login and non-API routes (Vite will handle those)
-    if (!url.startsWith('/api') || url === '/api/auth') return;
-    
-    if (!ACCESS_PASSWORD) return;
-
-    const sessionPassword = request.headers['x-access-password'] || (request.query as any).auth;
-    
-    if (sessionPassword !== ACCESS_PASSWORD) {
-      reply.code(401).send({ error: 'Encryption key required' });
+    const url = request.url.split('?')[0];
+    if (!url.startsWith('/api') || url === '/api/auth' || url === '/api/auth/session') return;
+    const session = getSession(request);
+    if (!session.authenticated) {
+      return reply.code(401).send({ error: 'Authentication required' });
     }
   });
 
   // --- API ROUTES ---
 
   app.post('/api/auth', async (request, reply) => {
-    const { password } = request.body as any;
-    if (password === ACCESS_PASSWORD) return { success: true };
-    reply.code(401).send({ error: 'Access denied' });
+    if (!ACCESS_PASSWORD) return { success: true, authenticated: true };
+
+    const { password } = (request.body || {}) as any;
+    if (!passwordsMatch(password)) {
+      return reply.code(401).send({ error: 'Access denied' });
+    }
+
+    const sessionId = randomBytes(32).toString('hex');
+    const now = Date.now();
+    sessions.set(sessionId, { createdAt: now, lastSeenAt: now });
+    setSessionCookie(reply, sessionId);
+    return { success: true, authenticated: true };
+  });
+
+  app.get('/api/auth/session', async (request, reply) => {
+    const session = getSession(request);
+    if (!session.authenticated) return reply.code(401).send({ authenticated: false });
+    return { authenticated: true };
+  });
+
+  app.post('/api/auth/logout', async (request, reply) => {
+    const sessionId = parseCookies(request.headers.cookie)[SESSION_COOKIE];
+    if (sessionId) sessions.delete(sessionId);
+    clearSessionCookie(reply);
+    return { success: true };
   });
 
   app.get('/api/files', async (request, reply) => {
-    const auth = (request.query as any).auth || request.headers['x-access-password'];
-    if (auth !== ACCESS_PASSWORD) return reply.code(401).send({ error: 'Unauthorized' });
 
     const metadataFiles = await fs.readdir(METADATA_DIR);
     const metadataList = await Promise.all(
