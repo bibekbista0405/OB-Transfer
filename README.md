@@ -30,3 +30,12 @@ Authentication uses server-side sessions in an HttpOnly cookie. API and Socket.I
 ## Streaming and range protection
 
 File downloads and previews support authenticated single-range requests for resumable transfers and media seeking. The server rejects malformed, multi-range, reversed, out-of-bounds, and oversized ranges with `416 Range Not Satisfiable` and never passes unvalidated offsets to the filesystem stream. Range responses are capped at 64 MiB per request to limit resource abuse.
+
+
+## SQLite metadata storage
+
+OB Transfer stores file metadata in the runtime SQLite database at `data/ob-transfer.sqlite3`. The database is intentionally excluded from Git because it contains private file metadata. The physical uploaded files remain under `uploads/`, which is also excluded from Git.
+
+On first startup after upgrading from the JSON metadata implementation, valid legacy records in `metadata/*.json` are imported into SQLite and the legacy JSON records are removed. SQLite is then the single authoritative metadata store. If a database record and its physical file become inconsistent, startup reconciliation removes the stale record; safe UUID-named orphan files can be re-indexed.
+
+**Runtime requirement:** Phase 13 uses Node's built-in `node:sqlite` API, so run OB Transfer with **Node.js 22.5+**.

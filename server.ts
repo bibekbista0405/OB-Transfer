@@ -13,6 +13,7 @@ import mime from 'mime-types';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import { DatabaseSync } from 'node:sqlite';
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ const __dirname = path.dirname(__filename);
 
 const UPLOADS_DIR = path.resolve(__dirname, 'uploads');
 const METADATA_DIR = path.resolve(__dirname, 'metadata');
+const DATABASE_PATH = path.resolve(__dirname, 'data', 'ob-transfer.sqlite3');
 
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_STORAGE = 50 * 1024 * 1024 * 1024;
@@ -53,66 +55,186 @@ const safeExtension = (filename: string) => {
 const isPreviewableMime = (value: string) =>
   /^(image\/(?:png|jpeg|gif|webp|bmp|avif)|video\/(?:mp4|webm|ogg)|audio\/(?:mpeg|mp4|ogg|wav|webm|aac)|application\/pdf)$/i.test(value);
 
-const metadataPathFor = (id: string) => path.join(METADATA_DIR, `${id}.json`);
+const metadataSchema = `
+  CREATE TABLE IF NOT EXISTS files (
+    id TEXT PRIMARY KEY,
+    original_name TEXT NOT NULL,
+    stored_name TEXT NOT NULL UNIQUE,
+    file_size INTEGER NOT NULL CHECK (file_size >= 0),
+    mime_type TEXT NOT NULL,
+    upload_date INTEGER NOT NULL,
+    extension TEXT NOT NULL,
+    last_modified REAL NOT NULL
+  );
+`;
 
-const isSafeFileId = (value: unknown) =>
-  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+let db: DatabaseSync;
 
-const isSafeStoredName = (value: unknown) =>
-  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\.[a-z0-9][a-z0-9._-]*)?$/i.test(value);
+const metadataFromRow = (row: any) => ({
+  id: row.id,
+  originalName: row.original_name,
+  storedName: row.stored_name,
+  fileSize: Number(row.file_size),
+  mimeType: row.mime_type,
+  uploadDate: Number(row.upload_date),
+  extension: row.extension,
+  lastModified: Number(row.last_modified),
+});
 
-const writeMetadataAtomic = async (id: string, metadata: Record<string, unknown>) => {
-  if (!isSafeFileId(id)) throw new Error('Invalid metadata id');
-  const target = metadataPathFor(id);
-  const temp = path.join(METADATA_DIR, `.${id}.${randomBytes(8).toString('hex')}.tmp`);
-  await fs.writeJson(temp, metadata, { spaces: 2, flag: 'wx' });
-  try {
-    await fs.rename(temp, target);
-  } catch (err) {
-    await fs.remove(temp).catch(() => undefined);
-    throw err;
-  }
+const isValidMetadataRecord = (metadata: any, expectedId?: string) =>
+  !!metadata &&
+  (!expectedId || metadata.id === expectedId) &&
+  isSafeFileId(metadata.id) &&
+  typeof metadata.originalName === 'string' &&
+  metadata.originalName.length <= MAX_FILENAME_LENGTH &&
+  isSafeStoredName(metadata.storedName) &&
+  Number.isSafeInteger(metadata.fileSize) && metadata.fileSize >= 0 &&
+  typeof metadata.mimeType === 'string' && metadata.mimeType.length <= 255 &&
+  Number.isSafeInteger(metadata.uploadDate) && metadata.uploadDate >= 0 &&
+  typeof metadata.extension === 'string' && metadata.extension.length <= MAX_EXTENSION_LENGTH &&
+  Number.isFinite(metadata.lastModified) && metadata.lastModified >= 0;
+
+const initDatabase = async () => {
+  await fs.ensureDir(path.dirname(DATABASE_PATH));
+  db = new DatabaseSync(DATABASE_PATH);
+  db.exec(metadataSchema);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_files_upload_date ON files(upload_date DESC);`);
+};
+
+const insertMetadata = (metadata: Record<string, unknown>) => {
+  if (!isValidMetadataRecord(metadata)) throw new Error('Invalid metadata');
+  const stmt = db.prepare(`
+    INSERT INTO files (id, original_name, stored_name, file_size, mime_type, upload_date, extension, last_modified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    metadata.id,
+    metadata.originalName,
+    metadata.storedName,
+    metadata.fileSize,
+    metadata.mimeType,
+    metadata.uploadDate,
+    metadata.extension,
+    metadata.lastModified,
+  );
+};
+
+const upsertMetadata = (metadata: Record<string, unknown>) => {
+  if (!isValidMetadataRecord(metadata)) throw new Error('Invalid metadata');
+  db.prepare(`
+    INSERT INTO files (id, original_name, stored_name, file_size, mime_type, upload_date, extension, last_modified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      original_name=excluded.original_name,
+      stored_name=excluded.stored_name,
+      file_size=excluded.file_size,
+      mime_type=excluded.mime_type,
+      upload_date=excluded.upload_date,
+      extension=excluded.extension,
+      last_modified=excluded.last_modified
+  `).run(
+    metadata.id,
+    metadata.originalName,
+    metadata.storedName,
+    metadata.fileSize,
+    metadata.mimeType,
+    metadata.uploadDate,
+    metadata.extension,
+    metadata.lastModified,
+  );
 };
 
 const readValidMetadata = async (id: string) => {
   if (!isSafeFileId(id)) return null;
-  const metadata = await fs.readJson(metadataPathFor(id));
-  if (!metadata || metadata.id !== id || !isSafeStoredName(metadata.storedName)) throw new Error('Invalid metadata');
-  if (typeof metadata.originalName !== 'string' || typeof metadata.fileSize !== 'number' || !Number.isSafeInteger(metadata.fileSize) || metadata.fileSize < 0) {
-    throw new Error('Invalid metadata');
-  }
+  const row = db.prepare(`SELECT * FROM files WHERE id = ?`).get(id);
+  if (!row) return null;
+  const metadata = metadataFromRow(row);
+  if (!isValidMetadataRecord(metadata, id)) throw new Error('Invalid metadata');
   return metadata;
 };
 
-const reconcileStorage = async () => {
-  const metadataFiles = (await fs.readdir(METADATA_DIR)).filter(name => name.endsWith('.json'));
-  const referenced = new Set<string>();
-  let removedMetadata = 0;
-  let indexedOrphans = 0;
+const getAllMetadata = () =>
+  db.prepare(`SELECT * FROM files ORDER BY upload_date DESC`).all().map(metadataFromRow);
 
+const getMetadataCount = () => Number(db.prepare(`SELECT COUNT(*) AS count FROM files`).get()?.count || 0);
+
+const deleteMetadata = (id: string) => {
+  if (!isSafeFileId(id)) throw new Error('Invalid metadata id');
+  db.prepare(`DELETE FROM files WHERE id = ?`).run(id);
+};
+
+const migrateJsonMetadata = async () => {
+  const metadataFiles = (await fs.readdir(METADATA_DIR)).filter(name => name.endsWith('.json'));
+  if (!metadataFiles.length) return 0;
+
+  let migrated = 0;
+  const successfullyImported = new Set<string>();
+  const records: Array<{ metadata: any; file: string }> = [];
   for (const file of metadataFiles) {
     const id = file.slice(0, -5);
+    if (!isSafeFileId(id)) continue;
     try {
-      const metadata = await readValidMetadata(id);
-      const filePath = path.join(UPLOADS_DIR, metadata!.storedName);
+      const metadata = JSON.parse(await fs.readFile(path.join(METADATA_DIR, file), 'utf8'));
+      records.push({ metadata, file });
+    } catch {
+      // Invalid legacy metadata is not imported and is removed below so it cannot
+      // remain a second, conflicting source of truth.
+      successfullyImported.add(file);
+    }
+  }
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const { metadata, file } of records) {
+      if (!isValidMetadataRecord(metadata)) continue;
+      const existing = db.prepare(`SELECT stored_name, file_size FROM files WHERE id = ?`).get(metadata.id) as any;
+      if (existing && (existing.stored_name !== metadata.storedName || Number(existing.file_size) !== metadata.fileSize)) continue;
+      upsertMetadata(metadata);
+      migrated += 1;
+      successfullyImported.add(file);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  for (const file of successfullyImported) {
+    await fs.remove(path.join(METADATA_DIR, file)).catch(() => undefined);
+  }
+  return migrated;
+};
+
+const reconcileStorage = async () => {
+  const referenced = new Set<string>();
+  let removedMetadata = 0;
+  let recoveredOrphans = 0;
+
+  // Validate database records against the physical storage before exposing them.
+  const records = getAllMetadata();
+  for (const metadata of records) {
+    try {
+      if (!isValidMetadataRecord(metadata)) throw new Error('Invalid metadata');
+      const filePath = path.join(UPLOADS_DIR, metadata.storedName);
       if (!await fs.pathExists(filePath)) {
-        await fs.remove(metadataPathFor(id));
+        deleteMetadata(metadata.id);
         removedMetadata += 1;
         continue;
       }
       const stats = await fs.stat(filePath);
-      if (!stats.isFile() || stats.size !== metadata!.fileSize) {
-        await fs.remove(metadataPathFor(id));
+      if (!stats.isFile() || stats.size !== metadata.fileSize) {
+        deleteMetadata(metadata.id);
         removedMetadata += 1;
         continue;
       }
-      referenced.add(metadata!.storedName);
+      referenced.add(metadata.storedName);
     } catch {
-      await fs.remove(metadataPathFor(id)).catch(() => undefined);
+      deleteMetadata(metadata.id);
       removedMetadata += 1;
     }
   }
 
+  // Recover safe orphan files from legacy/runtime storage. Unexpected names remain unreachable.
   for (const storedName of await fs.readdir(UPLOADS_DIR)) {
     if (storedName === '.gitkeep' || referenced.has(storedName) || !isSafeStoredName(storedName)) continue;
     const filePath = path.join(UPLOADS_DIR, storedName);
@@ -123,7 +245,7 @@ const reconcileStorage = async () => {
         continue;
       }
       const id = path.basename(storedName, path.extname(storedName));
-      if (!isSafeFileId(id) || await fs.pathExists(metadataPathFor(id))) continue;
+      if (!isSafeFileId(id) || readValidMetadataSync(id)) continue;
       const extension = path.extname(storedName).toLowerCase();
       const metadata = {
         id,
@@ -131,21 +253,28 @@ const reconcileStorage = async () => {
         storedName,
         fileSize: stats.size,
         mimeType: mime.lookup(extension) || 'application/octet-stream',
-        uploadDate: stats.birthtimeMs || stats.mtimeMs,
+        uploadDate: Math.floor(stats.birthtimeMs || stats.mtimeMs),
         extension,
         lastModified: stats.mtimeMs,
       };
-      await writeMetadataAtomic(id, metadata);
-      indexedOrphans += 1;
+      insertMetadata(metadata);
+      recoveredOrphans += 1;
     } catch {
       // Leave unexpected files alone; they are not made reachable without metadata.
     }
   }
 
-  if (removedMetadata || indexedOrphans) {
-    appLogForStartup(`Storage reconciliation: removed ${removedMetadata} stale metadata record(s), recovered ${indexedOrphans} orphan file(s).`);
+  if (removedMetadata || recoveredOrphans) {
+    appLogForStartup(`Storage reconciliation: removed ${removedMetadata} stale database record(s), recovered ${recoveredOrphans} orphan file(s).`);
   }
 };
+
+const readValidMetadataSync = (id: string) => {
+  if (!isSafeFileId(id)) return null;
+  const row = db.prepare(`SELECT * FROM files WHERE id = ?`).get(id);
+  return row ? metadataFromRow(row) : null;
+};
+
 
 let appLogForStartup = (message: string) => console.log(message);
 
@@ -154,12 +283,15 @@ async function start() {
   // Ensure directories exist
   await fs.ensureDir(UPLOADS_DIR);
   await fs.ensureDir(METADATA_DIR);
+  await initDatabase();
 
   const app = fastify({
     logger: true,
     bodyLimit: 10 * 1024 * 1024,
   });
   appLogForStartup = (message: string) => app.log.info(message);
+  const migratedLegacyRecords = await migrateJsonMetadata();
+  if (migratedLegacyRecords) app.log.info(`SQLite migration: imported ${migratedLegacyRecords} legacy metadata record(s).`);
   await reconcileStorage();
 
   // Security & Middleware
@@ -254,9 +386,6 @@ async function start() {
     }
     return total;
   };
-
-  const getMetadataCount = async () =>
-    (await fs.readdir(METADATA_DIR)).filter(name => name.endsWith('.json')).length;
 
   // --- Authentication / Sessions ---
   const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
@@ -562,17 +691,7 @@ async function start() {
   });
 
   app.get('/api/files', async (request, reply) => {
-    const metadataFiles = (await fs.readdir(METADATA_DIR)).filter(f => f.endsWith('.json'));
-    const metadataList = await Promise.all(metadataFiles.map(async f => {
-      try {
-        return await readValidMetadata(f.slice(0, -5));
-      } catch {
-        return null;
-      }
-    }));
-
-    const validMetadata = metadataList.filter(Boolean) as any[];
-    return validMetadata.sort((a, b) => b.uploadDate - a.uploadDate);
+    return getAllMetadata();
   });
 
   app.post('/api/upload', async (request, reply) => {
@@ -672,13 +791,13 @@ async function start() {
         lastModified: stats.mtimeMs,
       };
 
-      await writeMetadataAtomic(fileId, metadata);
+      insertMetadata(metadata);
       releaseReservation();
       io.emit('file:uploaded', metadata);
       return metadata;
     } catch (err: any) {
       if (filePath) await fs.remove(filePath).catch(() => undefined);
-      if (fileId) await fs.remove(path.join(METADATA_DIR, `${fileId}.json`)).catch(() => undefined);
+      if (fileId) deleteMetadata(fileId);
       releaseReservation();
       if (String(err?.message || '').includes('File too large') || String(err?.message || '').includes('resource limit')) {
         return reply.code(413).send({ error: 'UPLOAD_LIMIT', message: 'Upload exceeds the configured resource limit.' });
@@ -691,9 +810,6 @@ async function start() {
   const serveFileStream = async (request: any, reply: any, mode: 'download' | 'view') => {
     if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
-    const metadataPath = metadataPathFor(id);
-    if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
-
     let metadata: any;
     try {
       metadata = await readValidMetadata(id);
@@ -755,9 +871,6 @@ async function start() {
   app.delete('/api/files/:id', async (request, reply) => {
     if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
-    const metadataPath = metadataPathFor(id);
-    if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
-
     let metadata: any;
     try {
       metadata = await readValidMetadata(id);
@@ -769,7 +882,7 @@ async function start() {
     if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
 
     await fs.remove(filePath);
-    await fs.remove(metadataPath);
+    deleteMetadata(id);
     io.emit('file:deleted', { id });
     return { success: true };
   });

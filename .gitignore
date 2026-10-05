@@ -20,3 +20,8 @@ uploads/*
 metadata/*.json
 metadata/.*.tmp
 !metadata/.gitkeep
+
+# SQLite runtime database (contains private file metadata)
+data/*.sqlite*
+data/*.db*
+!data/.gitkeep
