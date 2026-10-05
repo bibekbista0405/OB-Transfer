@@ -39,3 +39,15 @@ OB Transfer stores file metadata in the runtime SQLite database at `data/ob-tran
 On first startup after upgrading from the JSON metadata implementation, valid legacy records in `metadata/*.json` are imported into SQLite and the legacy JSON records are removed. SQLite is then the single authoritative metadata store. If a database record and its physical file become inconsistent, startup reconciliation removes the stale record; safe UUID-named orphan files can be re-indexed.
 
 **Runtime requirement:** Phase 13 uses Node's built-in `node:sqlite` API, so run OB Transfer with **Node.js 22.5+**.
+
+## Frontend architecture
+
+Phase 14 keeps the existing vanilla-JavaScript UI while separating shared frontend concerns into `src/modules/`:
+
+- `constants.js` — frontend limits and shared constants
+- `state.js` — application state container
+- `dom.js` — centralized DOM element bindings
+- `api.js` — authenticated API request helpers
+- `app.js` — UI orchestration, rendering, socket events, upload queue, and previews
+
+This is an internal architecture cleanup only; the existing UI and API contracts remain unchanged.

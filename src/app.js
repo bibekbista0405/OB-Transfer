@@ -4,50 +4,10 @@
  */
 import confetti from 'canvas-confetti';
 
-// --- Global Constants ---
-const MAX_CONCURRENT_UPLOADS = 3;
-const MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
-
-
-// --- State Management ---
-const state = {
-    files: [],
-    uploadQueue: [],
-    activeUploads: 0,
-    socket: null
-};
-
-// --- DOM Elements ---
-const el = {
-    dropZone: document.getElementById('dropZone'),
-    fileInput: document.getElementById('fileInput'),
-    uploadQueue: document.getElementById('uploadQueue'),
-    fileList: document.getElementById('fileList'),
-    emptyState: document.getElementById('emptyState'),
-    socketStatus: document.getElementById('socketStatus'),
-    socketText: document.getElementById('socketText'),
-    authOverlay: document.getElementById('authOverlay'),
-    authForm: document.getElementById('authForm'),
-    accessKey: document.getElementById('accessKey'),
-    authError: document.getElementById('authError'),
-    previewModal: document.getElementById('previewModal'),
-    modalBackdrop: document.getElementById('modalBackdrop'),
-    modalContent: document.getElementById('modalContent'),
-    mediaContainer: document.getElementById('mediaContainer'),
-    closeModalBtn: document.getElementById('closeModalBtn'),
-    toastRegistry: document.getElementById('toastRegistry'),
-    startAllBtn: document.getElementById('startAllBtn'),
-    clearQueueBtn: document.getElementById('clearQueueBtn'),
-    fabBtn: document.getElementById('fabBtn'),
-    navExplorer: document.getElementById('nav-explorer'),
-    navTransfers: document.getElementById('nav-transfers'),
-    viewExplorer: document.getElementById('view-explorer'),
-    viewTransfers: document.getElementById('view-transfers'),
-    transferCount: document.getElementById('transferCount'),
-    queueEmptyState: document.getElementById('queueEmptyState'),
-    dragDropOverlay: document.getElementById('dragDropOverlay'),
-    dragDropContent: document.getElementById('dragDropContent'),
-};
+import { MAX_CONCURRENT_UPLOADS, MAX_FILE_SIZE } from './modules/constants.js';
+import { state } from './modules/state.js';
+import { el } from './modules/dom.js';
+import { api } from './modules/api.js';
 
 // --- Initialization ---
 function init() {
@@ -59,9 +19,7 @@ function init() {
 // --- Authentication ---
 async function checkAuth() {
     try {
-        const response = await fetch('/api/auth/session', {
-            credentials: 'same-origin'
-        });
+        const response = await api.session();
 
         if (response.ok) {
             el.authOverlay.classList.add('hidden');
@@ -83,12 +41,7 @@ async function handleLogin(e) {
     el.authError.classList.add('hidden');
 
     try {
-        const response = await fetch('/api/auth', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ password })
-        });
+        const response = await api.login(password);
 
         if (response.ok) {
             el.accessKey.value = '';
@@ -172,7 +125,7 @@ function switchView(view) {
 
 async function fetchFiles() {
     try {
-        const res = await fetch('/api/files', { credentials: 'same-origin' });
+        const res = await api.files();
         
         if (res.status === 401) {
             el.authOverlay.classList.remove('hidden');
@@ -734,10 +687,7 @@ async function deleteFile(id) {
     if (!confirm('Are you sure you want to purge this record from history?')) return;
 
     try {
-        const res = await fetch(`/api/files/${id}`, {
-            method: 'DELETE',
-            credentials: 'same-origin'
-        });
+        const res = await api.deleteFile(id);
         
         if (res.ok) {
             closePreview();
