@@ -97,8 +97,11 @@ async function handleLogin(e) {
             setupSocket();
             await fetchFiles();
         } else {
-            el.authError.classList.remove('hidden');
             el.accessKey.value = '';
+            el.authError.textContent = response.status === 429
+                ? 'Too many failed attempts. Please try again later.'
+                : 'Invalid access key.';
+            el.authError.classList.remove('hidden');
         }
     } catch (err) {
         showToast('SYSTEM ERROR', 'Authentication server unreachable.', 'error');

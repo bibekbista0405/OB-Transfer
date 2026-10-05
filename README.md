@@ -18,3 +18,9 @@ View your app in AI Studio: https://ai.studio/apps/22af83a3-ded4-45f7-9232-289f2
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Git and runtime uploads
+
+The `uploads/` directory is runtime storage and is intentionally excluded from Git. Uploaded file data must never be committed to the repository. The repository keeps only `uploads/.gitkeep` so the directory exists after cloning.
+
+If you clone OB Transfer, create or keep the local `uploads/` directory and let the server populate it with uploaded files.

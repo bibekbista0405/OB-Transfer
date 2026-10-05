@@ -1,1 +1,17 @@
-﻿uploads/
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# Runtime file uploads (never commit uploaded data)
+uploads/*
+!uploads/.gitkeep

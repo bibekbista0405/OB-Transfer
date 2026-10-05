@@ -113,6 +113,58 @@ async function start() {
   const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
   const SESSION_COOKIE = 'ob_transfer_session';
   const sessions = new Map<string, { createdAt: number; lastSeenAt: number }>();
+
+  // Authentication abuse protection. Keep this intentionally dependency-free so the
+  // protection is available before a session exists. A client gets five failed
+  // attempts per 15-minute window; repeated failures also incur a small delay.
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const LOGIN_MAX_FAILURES = 5;
+  const loginFailures = new Map<string, { count: number; firstFailureAt: number; lastFailureAt: number }>();
+
+  const getClientKey = (request: any) => {
+    // Fastify's request.ip is the normalized peer address. Do not trust arbitrary
+    // forwarding headers unless the server is explicitly configured with a trusted proxy.
+    return String(request.ip || request.socket?.remoteAddress || 'unknown');
+  };
+
+  const pruneLoginFailures = () => {
+    const now = Date.now();
+    for (const [key, entry] of loginFailures) {
+      if (now - entry.firstFailureAt >= LOGIN_WINDOW_MS) loginFailures.delete(key);
+    }
+  };
+
+  const getLoginLimit = (clientKey: string) => {
+    const entry = loginFailures.get(clientKey);
+    if (!entry) return { blocked: false, retryAfterSeconds: 0, delayMs: 0 };
+    const elapsed = Date.now() - entry.firstFailureAt;
+    if (elapsed >= LOGIN_WINDOW_MS) {
+      loginFailures.delete(clientKey);
+      return { blocked: false, retryAfterSeconds: 0, delayMs: 0 };
+    }
+    const retryAfterSeconds = Math.ceil((LOGIN_WINDOW_MS - elapsed) / 1000);
+    const blocked = entry.count >= LOGIN_MAX_FAILURES;
+    // 250ms, 500ms, 1s, 2s delays after consecutive failures.
+    const delayMs = Math.min(2000, 250 * (2 ** Math.max(0, entry.count - 1)));
+    return { blocked, retryAfterSeconds, delayMs };
+  };
+
+  const recordLoginFailure = (clientKey: string) => {
+    const now = Date.now();
+    const existing = loginFailures.get(clientKey);
+    if (!existing || now - existing.firstFailureAt >= LOGIN_WINDOW_MS) {
+      loginFailures.set(clientKey, { count: 1, firstFailureAt: now, lastFailureAt: now });
+      return;
+    }
+    existing.count += 1;
+    existing.lastFailureAt = now;
+  };
+
+  const clearLoginFailures = (clientKey: string) => loginFailures.delete(clientKey);
+
+  const loginFailureCleanupTimer = setInterval(pruneLoginFailures, 5 * 60 * 1000);
+  loginFailureCleanupTimer.unref();
+
   const sessionCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [sessionId, session] of sessions) {
@@ -262,11 +314,32 @@ async function start() {
   app.post('/api/auth', async (request, reply) => {
     if (!ACCESS_PASSWORD) return { success: true, authenticated: true };
 
-    const { password } = (request.body || {}) as any;
-    if (!passwordsMatch(password)) {
-      return reply.code(401).send({ error: 'Access denied' });
+    const clientKey = getClientKey(request);
+    const limit = getLoginLimit(clientKey);
+    if (limit.blocked) {
+      reply.header('Retry-After', String(limit.retryAfterSeconds));
+      app.log.warn({ clientKey }, 'Login rate limit exceeded');
+      return reply.code(429).send({
+        error: 'RATE_LIMITED',
+        message: 'Too many failed login attempts. Try again later.'
+      });
     }
 
+    const { password } = (request.body || {}) as any;
+    if (typeof password !== 'string' || password.length > 1024 || !passwordsMatch(password)) {
+      recordLoginFailure(clientKey);
+      const nextLimit = getLoginLimit(clientKey);
+      if (nextLimit.delayMs > 0) await new Promise(resolve => setTimeout(resolve, nextLimit.delayMs));
+      app.log.warn({ clientKey, failures: loginFailures.get(clientKey)?.count || 1 }, 'Login authentication failed');
+      if (nextLimit.blocked) reply.header('Retry-After', String(nextLimit.retryAfterSeconds));
+      return reply.code(nextLimit.blocked ? 429 : 401).send({
+        error: nextLimit.blocked ? 'RATE_LIMITED' : 'UNAUTHORIZED',
+        message: nextLimit.blocked ? 'Too many failed login attempts. Try again later.' : 'Access denied'
+      });
+    }
+
+    clearLoginFailures(clientKey);
+    app.log.info({ clientKey }, 'Login authentication succeeded');
     const sessionId = randomBytes(32).toString('hex');
     const now = Date.now();
     sessions.set(sessionId, { createdAt: now, lastSeenAt: now });
