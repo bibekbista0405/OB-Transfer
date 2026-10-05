@@ -361,6 +361,51 @@ async function start() {
     return true;
   };
 
+  // Streaming/range hardening. Only a single byte range is accepted; malformed,
+  // multi-range, reversed, or excessively large ranges are rejected instead of
+  // letting the filesystem stream arbitrary offsets or huge response bodies.
+  const MAX_RANGE_BYTES = 64 * 1024 * 1024;
+  const parseSingleRange = (header: unknown, size: number) => {
+    if (typeof header !== 'string' || !header.trim()) return null;
+    if (!/^bytes=\s*[^,]+$/.test(header)) return { invalid: true as const };
+    const match = header.match(/^bytes=\s*(\d*)-(\d*)\s*$/);
+    if (!match || size <= 0) return { invalid: true as const };
+
+    const startText = match[1];
+    const endText = match[2];
+    let start: number;
+    let end: number;
+
+    if (!startText && !endText) return { invalid: true as const };
+    if (!startText) {
+      const suffixLength = Number(endText);
+      if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return { invalid: true as const };
+      end = size - 1;
+      start = Math.max(0, size - suffixLength);
+    } else {
+      start = Number(startText);
+      if (!Number.isSafeInteger(start) || start < 0 || start >= size) return { invalid: true as const };
+      end = endText ? Number(endText) : size - 1;
+      if (!Number.isSafeInteger(end) || end < start) return { invalid: true as const };
+      end = Math.min(end, size - 1);
+    }
+
+    const length = end - start + 1;
+    if (length <= 0 || length > MAX_RANGE_BYTES) return { invalid: true as const, tooLarge: length > MAX_RANGE_BYTES };
+    return { start, end, length, invalid: false as const };
+  };
+
+  const setStreamHeaders = (reply: any, metadata: any, size: number, start?: number, end?: number) => {
+    reply.header('Accept-Ranges', 'bytes');
+    reply.header('Content-Type', typeof metadata.mimeType === 'string' ? metadata.mimeType : 'application/octet-stream');
+    if (start !== undefined && end !== undefined) {
+      reply.header('Content-Range', `bytes ${start}-${end}/${size}`);
+      reply.header('Content-Length', end - start + 1);
+    } else {
+      reply.header('Content-Length', size);
+    }
+  };
+
   // --- API ROUTES ---
 
   app.post('/api/auth', async (request, reply) => {
@@ -587,71 +632,71 @@ async function start() {
     }
   });
 
-  app.get('/api/files/:id/download', async (request, reply) => {
+  const serveFileStream = async (request: any, reply: any, mode: 'download' | 'view') => {
     if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
     const metadataPath = path.join(METADATA_DIR, `${id}.json`);
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
 
-    const metadata = await fs.readJson(metadataPath);
+    let metadata: any;
+    try {
+      metadata = await fs.readJson(metadataPath);
+    } catch {
+      return reply.code(500).send({ error: 'INVALID_METADATA' });
+    }
     if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
       return reply.code(500).send({ error: 'INVALID_METADATA' });
     }
+
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
     if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
-    const stats = await fs.stat(filePath);
+
+    let stats;
+    try {
+      stats = await fs.stat(filePath);
+    } catch {
+      return reply.code(404).send({ error: 'Missing' });
+    }
+    if (!stats.isFile() || stats.size < 0) return reply.code(404).send({ error: 'Missing' });
+
+    const responseMime = typeof metadata.mimeType === 'string' ? metadata.mimeType : 'application/octet-stream';
+    if (mode === 'view' && !isPreviewableMime(responseMime)) {
+      return reply.code(415).send({ error: 'PREVIEW_NOT_SUPPORTED', message: 'This file type is download-only.' });
+    }
 
     const safeDownloadName = String(metadata.originalName || 'download')
       .replace(/[\r\n\"]/g, '_')
       .slice(0, 180) || 'download';
-    reply.headers({
-      'Content-Length': stats.size,
-      'Content-Type': metadata.mimeType,
-      'Content-Disposition': `attachment; filename="${safeDownloadName}"`,
-    });
-    return reply.send(fs.createReadStream(filePath));
-  });
-
-  app.get('/api/files/:id/view', async (request, reply) => {
-    if (!requireValidFileId(request, reply)) return;
-    const { id } = request.params as any;
-    const metadataPath = path.join(METADATA_DIR, `${id}.json`);
-    if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
-
-    const metadata = await fs.readJson(metadataPath);
-    if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
-      return reply.code(500).send({ error: 'INVALID_METADATA' });
-    }
-    const filePath = path.join(UPLOADS_DIR, metadata.storedName);
-    if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
-    const stats = await fs.stat(filePath);
-    const responseMime = typeof metadata.mimeType === 'string' ? metadata.mimeType : 'application/octet-stream';
-    if (!isPreviewableMime(responseMime)) {
-      return reply.code(415).send({ error: 'PREVIEW_NOT_SUPPORTED', message: 'This file type is download-only.' });
-    }
-    const range = request.headers.range;
-
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
-      const chunksize = (end - start) + 1;
-      
-      reply.code(206).headers({
-        'Content-Range': `bytes ${start}-${end}/${stats.size}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
-        'Content-Type': metadata.mimeType,
-      });
-      return reply.send(fs.createReadStream(filePath, { start, end }));
+    if (mode === 'download') {
+      reply.header('Content-Disposition', `attachment; filename=\"${safeDownloadName}\"`);
     } else {
-      reply.headers({
-        'Content-Length': stats.size,
-        'Content-Type': metadata.mimeType,
-      });
-      return reply.send(fs.createReadStream(filePath));
+      reply.header('Content-Disposition', 'inline');
     }
-  });
+
+    const parsedRange = parseSingleRange(request.headers.range, stats.size);
+    if (parsedRange?.invalid) {
+      reply.header('Content-Range', `bytes */${stats.size}`);
+      if (parsedRange.tooLarge) {
+        return reply.code(416).send({ error: 'RANGE_TOO_LARGE', message: 'Requested range is too large.' });
+      }
+      return reply.code(416).send({ error: 'INVALID_RANGE', message: 'Invalid or unsupported byte range.' });
+    }
+
+    if (parsedRange) {
+      setStreamHeaders(reply, metadata, stats.size, parsedRange.start, parsedRange.end);
+      reply.code(206);
+      return reply.send(fs.createReadStream(filePath, { start: parsedRange.start, end: parsedRange.end }));
+    }
+
+    setStreamHeaders(reply, metadata, stats.size);
+    return reply.send(fs.createReadStream(filePath));
+  };
+
+  app.get('/api/files/:id/download', async (request, reply) =>
+    serveFileStream(request, reply, 'download'));
+
+  app.get('/api/files/:id/view', async (request, reply) =>
+    serveFileStream(request, reply, 'view'));
 
   app.delete('/api/files/:id', async (request, reply) => {
     if (!requireValidFileId(request, reply)) return;

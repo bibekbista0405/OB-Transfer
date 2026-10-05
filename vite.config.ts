@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [tailwindcss()],
   server: {
     allowedHosts: true,
-    // HMR is disabled in AI Studio via DISABLE_HMR env var.
+    // HMR can be disabled in restricted environments via DISABLE_HMR.
     hmr: process.env.DISABLE_HMR !== 'true',
     watch: process.env.DISABLE_HMR === 'true' ? null : {},
   },
