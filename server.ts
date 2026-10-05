@@ -53,6 +53,102 @@ const safeExtension = (filename: string) => {
 const isPreviewableMime = (value: string) =>
   /^(image\/(?:png|jpeg|gif|webp|bmp|avif)|video\/(?:mp4|webm|ogg)|audio\/(?:mpeg|mp4|ogg|wav|webm|aac)|application\/pdf)$/i.test(value);
 
+const metadataPathFor = (id: string) => path.join(METADATA_DIR, `${id}.json`);
+
+const isSafeFileId = (value: unknown) =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+const isSafeStoredName = (value: unknown) =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\.[a-z0-9][a-z0-9._-]*)?$/i.test(value);
+
+const writeMetadataAtomic = async (id: string, metadata: Record<string, unknown>) => {
+  if (!isSafeFileId(id)) throw new Error('Invalid metadata id');
+  const target = metadataPathFor(id);
+  const temp = path.join(METADATA_DIR, `.${id}.${randomBytes(8).toString('hex')}.tmp`);
+  await fs.writeJson(temp, metadata, { spaces: 2, flag: 'wx' });
+  try {
+    await fs.rename(temp, target);
+  } catch (err) {
+    await fs.remove(temp).catch(() => undefined);
+    throw err;
+  }
+};
+
+const readValidMetadata = async (id: string) => {
+  if (!isSafeFileId(id)) return null;
+  const metadata = await fs.readJson(metadataPathFor(id));
+  if (!metadata || metadata.id !== id || !isSafeStoredName(metadata.storedName)) throw new Error('Invalid metadata');
+  if (typeof metadata.originalName !== 'string' || typeof metadata.fileSize !== 'number' || !Number.isSafeInteger(metadata.fileSize) || metadata.fileSize < 0) {
+    throw new Error('Invalid metadata');
+  }
+  return metadata;
+};
+
+const reconcileStorage = async () => {
+  const metadataFiles = (await fs.readdir(METADATA_DIR)).filter(name => name.endsWith('.json'));
+  const referenced = new Set<string>();
+  let removedMetadata = 0;
+  let indexedOrphans = 0;
+
+  for (const file of metadataFiles) {
+    const id = file.slice(0, -5);
+    try {
+      const metadata = await readValidMetadata(id);
+      const filePath = path.join(UPLOADS_DIR, metadata!.storedName);
+      if (!await fs.pathExists(filePath)) {
+        await fs.remove(metadataPathFor(id));
+        removedMetadata += 1;
+        continue;
+      }
+      const stats = await fs.stat(filePath);
+      if (!stats.isFile() || stats.size !== metadata!.fileSize) {
+        await fs.remove(metadataPathFor(id));
+        removedMetadata += 1;
+        continue;
+      }
+      referenced.add(metadata!.storedName);
+    } catch {
+      await fs.remove(metadataPathFor(id)).catch(() => undefined);
+      removedMetadata += 1;
+    }
+  }
+
+  for (const storedName of await fs.readdir(UPLOADS_DIR)) {
+    if (storedName === '.gitkeep' || referenced.has(storedName) || !isSafeStoredName(storedName)) continue;
+    const filePath = path.join(UPLOADS_DIR, storedName);
+    try {
+      const stats = await fs.stat(filePath);
+      if (!stats.isFile() || stats.size <= 0) {
+        await fs.remove(filePath);
+        continue;
+      }
+      const id = path.basename(storedName, path.extname(storedName));
+      if (!isSafeFileId(id) || await fs.pathExists(metadataPathFor(id))) continue;
+      const extension = path.extname(storedName).toLowerCase();
+      const metadata = {
+        id,
+        originalName: `recovered${extension}`,
+        storedName,
+        fileSize: stats.size,
+        mimeType: mime.lookup(extension) || 'application/octet-stream',
+        uploadDate: stats.birthtimeMs || stats.mtimeMs,
+        extension,
+        lastModified: stats.mtimeMs,
+      };
+      await writeMetadataAtomic(id, metadata);
+      indexedOrphans += 1;
+    } catch {
+      // Leave unexpected files alone; they are not made reachable without metadata.
+    }
+  }
+
+  if (removedMetadata || indexedOrphans) {
+    appLogForStartup(`Storage reconciliation: removed ${removedMetadata} stale metadata record(s), recovered ${indexedOrphans} orphan file(s).`);
+  }
+};
+
+let appLogForStartup = (message: string) => console.log(message);
+
 
 async function start() {
   // Ensure directories exist
@@ -63,6 +159,8 @@ async function start() {
     logger: true,
     bodyLimit: 10 * 1024 * 1024,
   });
+  appLogForStartup = (message: string) => app.log.info(message);
+  await reconcileStorage();
 
   // Security & Middleware
   app.addHook('onRequest', async (request, reply) => {
@@ -464,58 +562,16 @@ async function start() {
   });
 
   app.get('/api/files', async (request, reply) => {
-
-    const metadataFiles = await fs.readdir(METADATA_DIR);
-    const metadataList = await Promise.all(
-      metadataFiles.filter(f => f.endsWith('.json')).map(async (f) => {
-        try {
-          return await fs.readJson(path.join(METADATA_DIR, f));
-        } catch (e) {
-          return null;
-        }
-      })
-    );
-    
-    let validMetadata = metadataList.filter(m => m !== null);
-    
-    // Check UPLOADS_DIR for missing metadata
-    const uploadFiles = await fs.readdir(UPLOADS_DIR);
-    const processedStoredNames = new Set(validMetadata.map(m => m.storedName));
-    
-    for (const fileName of uploadFiles) {
-      if (!processedStoredNames.has(fileName)) {
-        try {
-          const filePath = path.join(UPLOADS_DIR, fileName);
-          const stats = await fs.stat(filePath);
-          const fileId = uuidv4();
-          const extension = path.extname(fileName);
-          
-          // Try to reconstruct original name if it follows the pattern
-          let originalName = fileName;
-          const match = fileName.match(/^\d+-(.*)-by-bibek/);
-          if (match) {
-            originalName = match[1] + extension;
-          }
-
-          const metadata = {
-            id: fileId,
-            originalName,
-            storedName: fileName,
-            fileSize: stats.size,
-            mimeType: mime.lookup(extension) || 'application/octet-stream',
-            uploadDate: stats.birthtimeMs || stats.mtimeMs,
-            extension: extension.toLowerCase(),
-            lastModified: stats.mtimeMs,
-          };
-          
-          await fs.writeJson(path.join(METADATA_DIR, `${fileId}.json`), metadata);
-          validMetadata.push(metadata);
-        } catch (err) {
-          app.log.error({ err, fileName }, 'Index failed');
-        }
+    const metadataFiles = (await fs.readdir(METADATA_DIR)).filter(f => f.endsWith('.json'));
+    const metadataList = await Promise.all(metadataFiles.map(async f => {
+      try {
+        return await readValidMetadata(f.slice(0, -5));
+      } catch {
+        return null;
       }
-    }
+    }));
 
+    const validMetadata = metadataList.filter(Boolean) as any[];
     return validMetadata.sort((a, b) => b.uploadDate - a.uploadDate);
   });
 
@@ -616,7 +672,7 @@ async function start() {
         lastModified: stats.mtimeMs,
       };
 
-      await fs.writeJson(path.join(METADATA_DIR, `${fileId}.json`), metadata, { spaces: 2, flag: 'wx' });
+      await writeMetadataAtomic(fileId, metadata);
       releaseReservation();
       io.emit('file:uploaded', metadata);
       return metadata;
@@ -635,18 +691,16 @@ async function start() {
   const serveFileStream = async (request: any, reply: any, mode: 'download' | 'view') => {
     if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
-    const metadataPath = path.join(METADATA_DIR, `${id}.json`);
+    const metadataPath = metadataPathFor(id);
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
 
     let metadata: any;
     try {
-      metadata = await fs.readJson(metadataPath);
+      metadata = await readValidMetadata(id);
     } catch {
       return reply.code(500).send({ error: 'INVALID_METADATA' });
     }
-    if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
-      return reply.code(500).send({ error: 'INVALID_METADATA' });
-    }
+    if (!metadata) return reply.code(404).send({ error: 'Missing' });
 
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
     if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
@@ -701,13 +755,16 @@ async function start() {
   app.delete('/api/files/:id', async (request, reply) => {
     if (!requireValidFileId(request, reply)) return;
     const { id } = request.params as any;
-    const metadataPath = path.join(METADATA_DIR, `${id}.json`);
+    const metadataPath = metadataPathFor(id);
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
 
-    const metadata = await fs.readJson(metadataPath);
-    if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
+    let metadata: any;
+    try {
+      metadata = await readValidMetadata(id);
+    } catch {
       return reply.code(500).send({ error: 'INVALID_METADATA' });
     }
+    if (!metadata) return reply.code(404).send({ error: 'Missing' });
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
     if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
 

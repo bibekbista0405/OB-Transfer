@@ -18,4 +18,5 @@ uploads/*
 
 # Runtime metadata records (may contain private file information)
 metadata/*.json
+metadata/.*.tmp
 !metadata/.gitkeep
