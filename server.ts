@@ -40,8 +40,66 @@ async function start() {
   });
 
   await app.register(middie);
-  await app.register(fastifyHelmet, { contentSecurityPolicy: false });
-  await app.register(fastifyCors, { origin: '*' });
+  const configuredAppUrl = process.env.APP_URL || 'http://localhost:3000';
+  const configuredUrl = new URL(configuredAppUrl);
+  const configuredOrigin = configuredUrl.origin;
+  const websocketOrigin = `${configuredUrl.protocol === 'https:' ? 'wss:' : 'ws:'}//${configuredUrl.host}`;
+  const allowedOrigins = new Set([configuredOrigin]);
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Browser security policy. Keep the policy explicit because the UI currently
+  // depends on Socket.IO, canvas-confetti, and Google Fonts from known CDNs.
+  // No wildcard script/connect/font sources are permitted.
+  const cspDirectives: Record<string, string[]> = {
+    defaultSrc: ["'self'"],
+    baseUri: ["'self'"],
+    objectSrc: ["'none'"],
+    frameAncestors: ["'none'"],
+    frameSrc: ["'none'"],
+    formAction: ["'self'"],
+    scriptSrc: ["'self'", 'https://cdn.socket.io', 'https://cdn.jsdelivr.net'],
+    styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+    fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+    imgSrc: ["'self'", 'data:', 'blob:'],
+    mediaSrc: ["'self'", 'blob:'],
+    connectSrc: ["'self'", websocketOrigin],
+    workerSrc: ["'self'", 'blob:'],
+  };
+
+  if (isProduction) {
+    cspDirectives.upgradeInsecureRequests = [];
+  }
+
+  await app.register(fastifyHelmet, {
+    contentSecurityPolicy: {
+      directives: cspDirectives,
+    },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    frameguard: { action: 'deny' },
+    noSniff: true,
+    hidePoweredBy: true,
+    crossOriginResourcePolicy: { policy: 'same-origin' },
+    hsts: isProduction ? {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: false,
+    } : false,
+  });
+
+  await app.register(fastifyCors, {
+    origin: (origin, cb) => {
+      // Same-origin requests normally omit Origin. Cross-origin browser requests
+      // must match the configured application origin exactly.
+      if (!origin) return cb(null, true);
+      const normalizedOrigin = origin.replace(/\/$/, '');
+      if (allowedOrigins.has(normalizedOrigin)) return cb(null, true);
+      return cb(new Error('Origin not allowed'), false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type'],
+    maxAge: 86400,
+  });
 
   // Multipart for streaming uploads
   await app.register(fastifyMultipart, {
@@ -55,7 +113,6 @@ async function start() {
   const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
   const SESSION_COOKIE = 'ob_transfer_session';
   const sessions = new Map<string, { createdAt: number; lastSeenAt: number }>();
-  const isProduction = process.env.NODE_ENV === 'production';
   const sessionCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [sessionId, session] of sessions) {
@@ -108,7 +165,16 @@ async function start() {
 
   // Socket.io
   const io = new Server(app.server, {
-    cors: { origin: process.env.APP_URL || 'http://localhost:3000' }
+    cors: {
+      origin: configuredOrigin,
+      credentials: true,
+    },
+    allowRequest: (request, callback) => {
+      const origin = request.headers.origin;
+      if (!origin) return callback('Origin required', false);
+      if (allowedOrigins.has(origin.replace(/\/$/, ''))) return callback(null, true);
+      return callback('Origin not allowed', false);
+    },
   });
 
   io.use((socket, next) => {
@@ -121,6 +187,7 @@ async function start() {
       return next(new Error('Unauthorized'));
     }
     session.lastSeenAt = Date.now();
+    socket.data.sessionId = sessionId;
     next();
   });
 
@@ -129,6 +196,19 @@ async function start() {
     socket.emit('status', { connected: true });
     socket.on('disconnect', () => app.log.info({ socketId: socket.id }, 'Realtime client disconnected'));
   });
+
+  const socketSessionCleanupTimer = setInterval(() => {
+    if (!ACCESS_PASSWORD) return;
+    const now = Date.now();
+    for (const socket of io.sockets.sockets.values()) {
+      const sessionId = socket.data.sessionId as string | undefined;
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      if (!session || now - session.lastSeenAt > SESSION_TTL_MS) {
+        socket.disconnect(true);
+      }
+    }
+  }, 60 * 1000);
+  socketSessionCleanupTimer.unref();
 
   // API authorization boundary. Only the authentication bootstrap endpoints are public;
   // every other /api route requires a valid server-side session. This deny-by-default
@@ -203,7 +283,12 @@ async function start() {
   app.post('/api/auth/logout', async (request, reply) => {
     const session = getSession(request);
     const sessionId = session.sessionId;
-    if (session.authenticated && sessionId) sessions.delete(sessionId);
+    if (session.authenticated && sessionId) {
+      sessions.delete(sessionId);
+      for (const socket of io.sockets.sockets.values()) {
+        if (socket.data.sessionId === sessionId) socket.disconnect(true);
+      }
+    }
     clearSessionCookie(reply);
     return { success: true };
   });
@@ -317,10 +402,13 @@ async function start() {
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
     const stats = await fs.stat(filePath);
 
+    const safeDownloadName = String(metadata.originalName || 'download')
+      .replace(/[\r\n\"]/g, '_')
+      .slice(0, 180) || 'download';
     reply.headers({
       'Content-Length': stats.size,
       'Content-Type': metadata.mimeType,
-      'Content-Disposition': `attachment; filename="${metadata.originalName}"`,
+      'Content-Disposition': `attachment; filename="${safeDownloadName}"`,
     });
     return reply.send(fs.createReadStream(filePath));
   });

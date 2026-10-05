@@ -203,39 +203,43 @@ function renderFileList() {
 function createFileCard(file) {
     const div = document.createElement('div');
     div.className = 'mobile-card flex items-center gap-4 group cursor-pointer active:scale-95 transition-all';
-    
+
     const ext = (file.extension || 'bin').replace('.', '');
-    const dateStr = new Date(file.uploadDate).toLocaleDateString(undefined, { 
-        month: 'short', day: 'numeric'
-    });
+    const dateStr = new Date(file.uploadDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     const size = formatBytes(file.fileSize);
-    const icon = getFileIcon(ext);
 
-    div.innerHTML = `
-        <div class="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center shrink-0 border border-white/5 group-hover:border-[#00ff9c]/30 transition-colors">
-            ${icon}
-        </div>
-        <div class="flex-grow min-w-0">
-            <h4 class="font-bold text-sm truncate uppercase tracking-tight group-hover:text-[#00ff9c] transition-colors">${file.originalName}</h4>
-            <div class="flex items-center gap-2 mt-0.5">
-                <span class="text-[10px] text-gray-500 font-mono uppercase">${size}</span>
-                <span class="w-1 h-1 rounded-full bg-white/10"></span>
-                <span class="text-[10px] text-gray-500 font-mono uppercase">${dateStr}</span>
-            </div>
-        </div>
-        <div class="p-2 text-gray-700">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-            </svg>
-        </div>
-    `;
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center shrink-0 border border-white/5 group-hover:border-[#00ff9c]/30 transition-colors';
+    const iconHolder = document.createElement('div');
+    iconHolder.innerHTML = getFileIcon(ext); // application-owned static SVG only
+    iconWrap.appendChild(iconHolder);
 
+    const content = document.createElement('div');
+    content.className = 'flex-grow min-w-0';
+    const name = document.createElement('h4');
+    name.className = 'font-bold text-sm truncate uppercase tracking-tight group-hover:text-[#00ff9c] transition-colors';
+    name.textContent = file.originalName || 'Unnamed file';
+    const meta = document.createElement('div');
+    meta.className = 'flex items-center gap-2 mt-0.5';
+    const sizeSpan = document.createElement('span');
+    sizeSpan.className = 'text-[10px] text-gray-500 font-mono uppercase';
+    sizeSpan.textContent = size;
+    const dot = document.createElement('span');
+    dot.className = 'w-1 h-1 rounded-full bg-white/10';
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'text-[10px] text-gray-500 font-mono uppercase';
+    dateSpan.textContent = dateStr;
+    meta.append(sizeSpan, dot, dateSpan);
+    content.append(name, meta);
+
+    const arrow = document.createElement('div');
+    arrow.className = 'p-2 text-gray-700';
+    arrow.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>';
+    div.append(iconWrap, content, arrow);
     div.addEventListener('click', () => openPreview(file));
-
     return div;
 }
 
-// --- Upload Logic ---
 function addToQueue(files) {
     Array.from(files).forEach(file => {
         if (file.size > MAX_FILE_SIZE) {
@@ -283,7 +287,7 @@ function renderQueue() {
     });
 
     state.uploadQueue.forEach((item, index) => {
-        let div = el.uploadQueue.querySelector(`[data-id="${item.id}"]`);
+        let div = Array.from(el.uploadQueue.children).find(child => child.dataset.id === item.id) || null;
         
         const statusColors = {
             'queued': 'bg-gray-700 text-white',
@@ -349,7 +353,7 @@ function renderQueue() {
                         </div>
                     </div>
                 </div>
-                <button class="remove-btn relative z-10 w-12 h-12 flex items-center justify-center text-gray-500 hover:text-red-400 transition-all hover:bg-red-500/10 rounded-2xl group border border-transparent hover:border-red-500/20" data-id="${item.id}">
+                <button class="remove-btn relative z-10 w-12 h-12 flex items-center justify-center text-gray-500 hover:text-red-400 transition-all hover:bg-red-500/10 rounded-2xl group border border-transparent hover:border-red-500/20">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
@@ -573,8 +577,7 @@ function openPreview(file) {
     const modal = el.previewModal;
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
-    
-    // Trigger entrance animation
+
     requestAnimationFrame(() => {
         modal.classList.add('active');
         el.modalContent.style.opacity = '1';
@@ -582,85 +585,100 @@ function openPreview(file) {
     });
 
     const container = el.mediaContainer;
-    container.innerHTML = '';
+    container.replaceChildren();
 
-    // Update Metadata
-    document.getElementById('previewName').textContent = file.originalName;
+    document.getElementById('previewName').textContent = file.originalName || 'Unnamed file';
     document.getElementById('previewSize').textContent = formatBytes(file.fileSize);
     document.getElementById('previewDate').textContent = new Date(file.uploadDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    document.getElementById('previewMime').textContent = file.mimeType;
-    document.getElementById('previewExt').textContent = file.extension.toUpperCase();
+    document.getElementById('previewMime').textContent = file.mimeType || 'application/octet-stream';
+    document.getElementById('previewExt').textContent = (file.extension || '').toUpperCase();
     document.getElementById('previewId').textContent = file.id;
     document.getElementById('previewStoredName').textContent = file.storedName;
 
     const viewUrl = `/api/files/${file.id}/view`;
     const downloadUrl = `/api/files/${file.id}/download`;
-    
     document.getElementById('downloadBtn').href = downloadUrl;
     document.getElementById('deleteBtn').onclick = () => deleteFile(file.id);
 
-    // Stop any existing visualizer
     if (visualizerInterval) clearInterval(visualizerInterval);
+    const type = String(file.mimeType || '').split('/')[0];
 
-    const type = file.mimeType.split('/')[0];
-    
     switch(type) {
-        case 'video':
-            container.innerHTML = `
-                <div class="w-full h-full flex items-center justify-center bg-black rounded-xl overflow-hidden group">
-                    <video id="nebulaPlayer" src="${viewUrl}" class="w-full h-full max-h-[85vh] object-contain" controls playsinline autoplay preload="auto"></video>
-                </div>
-            `;
-            
-            setTimeout(() => {
-                const video = document.getElementById('nebulaPlayer');
-                if (video) {
-                    video.play().catch(e => console.log('Autoplay blocked:', e));
-                }
-            }, 50);
+        case 'video': {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'w-full h-full flex items-center justify-center bg-black rounded-xl overflow-hidden group';
+            const video = document.createElement('video');
+            video.id = 'nebulaPlayer';
+            video.src = viewUrl;
+            video.className = 'w-full h-full max-h-[85vh] object-contain';
+            video.controls = true;
+            video.playsInline = true;
+            video.autoplay = true;
+            video.preload = 'auto';
+            wrapper.appendChild(video);
+            container.appendChild(wrapper);
+            setTimeout(() => video.play().catch(e => console.log('Autoplay blocked:', e)), 50);
             break;
-            
-        case 'image':
-            container.innerHTML = `
-                <div class="relative w-full h-full flex items-center justify-center overflow-hidden">
-                    <div class="zoom-blur-bg" style="background-image: url('${viewUrl}')"></div>
-                    <img src="${viewUrl}" class="media-preview-image shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)] rounded-xl z-10" alt="${file.originalName}">
-                </div>
-            `;
-            // Add a small delay then trigger scale up via CSS class on modal or parent
+        }
+        case 'image': {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'relative w-full h-full flex items-center justify-center overflow-hidden';
+            const blur = document.createElement('div');
+            blur.className = 'zoom-blur-bg';
+            blur.style.backgroundImage = `url("${viewUrl}")`;
+            const image = document.createElement('img');
+            image.src = viewUrl;
+            image.className = 'media-preview-image shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)] rounded-xl z-10';
+            image.alt = file.originalName || 'File preview';
+            wrapper.append(blur, image);
+            container.appendChild(wrapper);
             break;
-            
-        case 'audio':
-            container.innerHTML = `
-                <div class="audio-card glass-panel animate-revealer">
-                    <div class="w-20 h-20 bg-[#00ff9c]/10 rounded-full flex items-center justify-center border border-[#00ff9c]/20 animate-pulse">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 text-[#00ff9c]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                    </div>
-                    <div id="visualizer" class="visualizer-container">
-                        ${Array(32).fill(0).map(() => `<div class="visualizer-bar"></div>`).join('')}
-                    </div>
-                    <audio id="nebulaAudio" src="${viewUrl}" controls class="w-full"></audio>
-                    <p class="text-[10px] font-mono text-[#00ff9c]/40 uppercase tracking-[0.4em]">Audio Frequency Stabilizer Active</p>
+        }
+        case 'audio': {
+            const card = document.createElement('div');
+            card.className = 'audio-card glass-panel animate-revealer';
+            card.innerHTML = `
+                <div class="w-20 h-20 bg-[#00ff9c]/10 rounded-full flex items-center justify-center border border-[#00ff9c]/20 animate-pulse">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 text-[#00ff9c]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
                 </div>
+                <div id="visualizer" class="visualizer-container"></div>
+                <audio id="nebulaAudio" controls class="w-full"></audio>
+                <p class="text-[10px] font-mono text-[#00ff9c]/40 uppercase tracking-[0.4em]">Audio Frequency Stabilizer Active</p>
             `;
+            const visualizer = card.querySelector('#visualizer');
+            for (let i = 0; i < 32; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'visualizer-bar';
+                visualizer.appendChild(bar);
+            }
+            card.querySelector('#nebulaAudio').src = viewUrl;
+            container.appendChild(card);
             startVisualizer();
             break;
-            
-        default:
-            container.innerHTML = `
-                <div class="flex flex-col items-center gap-8 p-12 glass-panel rounded-[3rem] border border-white/5">
-                    <div class="w-32 h-32 bg-white/5 rounded-[2.5rem] border border-white/10 flex items-center justify-center shadow-inner">
-                        ${getFileIcon(file.extension)}
-                    </div>
-                    <div class="text-center space-y-2">
-                        <h3 class="text-xl font-bold uppercase tracking-tighter">Format Unrecognised</h3>
-                        <p class="text-gray-500 font-mono text-[10px] uppercase tracking-widest">Protocol mismatch: Direct rendering restricted</p>
-                    </div>
-                    <a href="${downloadUrl}" class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest transition-all">Download Local Copy</a>
-                </div>
-            `;
+        }
+        default: {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'flex flex-col items-center gap-8 p-12 glass-panel rounded-[3rem] border border-white/5';
+            const icon = document.createElement('div');
+            icon.className = 'w-32 h-32 bg-white/5 rounded-[2.5rem] border border-white/10 flex items-center justify-center shadow-inner';
+            icon.innerHTML = getFileIcon(file.extension); // application-owned static SVG only
+            const text = document.createElement('div');
+            text.className = 'text-center space-y-2';
+            const title = document.createElement('h3');
+            title.className = 'text-xl font-bold uppercase tracking-tighter';
+            title.textContent = 'Format Unrecognised';
+            const desc = document.createElement('p');
+            desc.className = 'text-gray-500 font-mono text-[10px] uppercase tracking-widest';
+            desc.textContent = 'Protocol mismatch: Direct rendering restricted';
+            text.append(title, desc);
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.className = 'px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest transition-all';
+            link.textContent = 'Download Local Copy';
+            wrapper.append(icon, text, link);
+            container.appendChild(wrapper);
+            break;
+        }
     }
 }
 
@@ -782,15 +800,19 @@ function showToast(title, message, type = 'info') {
         error: 'bg-red-500/10 border-red-500/20 text-red-500',
         warning: 'bg-yellow-500/10 border-yellow-500/20 text-yellow-500',
         info: 'bg-blue-500/10 border-blue-500/20 text-blue-500'
-    }[type];
+    }[type] || 'bg-blue-500/10 border-blue-500/20 text-blue-500';
 
     div.className = `toast-item w-80 p-5 rounded-2xl border backdrop-blur-xl ${bg} glass-panel shadow-2xl flex gap-4 pointer-events-auto`;
-    div.innerHTML = `
-        <div class="flex-grow">
-            <h5 class="text-[10px] font-black uppercase tracking-[0.2em] mb-1 truncate">${title}</h5>
-            <p class="text-[13px] opacity-80 leading-tight">${message}</p>
-        </div>
-    `;
+    const content = document.createElement('div');
+    content.className = 'flex-grow';
+    const heading = document.createElement('h5');
+    heading.className = 'text-[10px] font-black uppercase tracking-[0.2em] mb-1 truncate';
+    heading.textContent = title;
+    const body = document.createElement('p');
+    body.className = 'text-[13px] opacity-80 leading-tight';
+    body.textContent = message;
+    content.append(heading, body);
+    div.appendChild(content);
 
     el.toastRegistry.appendChild(div);
     setTimeout(() => {
