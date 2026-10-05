@@ -22,6 +22,38 @@ const __dirname = path.dirname(__filename);
 const UPLOADS_DIR = path.resolve(__dirname, 'uploads');
 const METADATA_DIR = path.resolve(__dirname, 'metadata');
 
+const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_STORAGE = 50 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_FILES = 1000;
+const MAX_FILENAME_LENGTH = 255;
+const MAX_EXTENSION_LENGTH = 32;
+const MAX_CONCURRENT_UPLOADS = 4;
+
+const parsePositiveIntegerEnv = (name: string, fallback: number) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+};
+
+const normalizeDisplayFilename = (value: unknown) => {
+  const input = typeof value === 'string' ? value.normalize('NFKC') : 'download';
+  const withoutControls = Array.from(input).filter(char => {
+    const code = char.charCodeAt(0);
+    return code >= 0x20 && code !== 0x7f;
+  }).join('');
+  const basename = path.basename(withoutControls.replace(/\\/g, '/'));
+  return basename.replace(/[\r\n"<>:|?*]/g, '_').trim().slice(0, MAX_FILENAME_LENGTH) || 'download';
+};
+
+const safeExtension = (filename: string) => {
+  const ext = path.extname(filename).toLowerCase();
+  if (!ext || ext.length > MAX_EXTENSION_LENGTH || !/^\.[a-z0-9][a-z0-9._-]*$/.test(ext)) return '';
+  return ext;
+};
+
+const isPreviewableMime = (value: string) =>
+  /^(image\/(?:png|jpeg|gif|webp|bmp|avif)|video\/(?:mp4|webm|ogg)|audio\/(?:mpeg|mp4|ogg|wav|webm|aac)|application\/pdf)$/i.test(value);
+
+
 async function start() {
   // Ensure directories exist
   await fs.ensureDir(UPLOADS_DIR);
@@ -101,12 +133,32 @@ async function start() {
     maxAge: 86400,
   });
 
-  // Multipart for streaming uploads
+  const MAX_FILE_SIZE = parsePositiveIntegerEnv('MAX_FILE_SIZE_BYTES', DEFAULT_MAX_FILE_SIZE);
+  const MAX_STORAGE_BYTES = parsePositiveIntegerEnv('MAX_STORAGE_BYTES', DEFAULT_MAX_STORAGE);
+  const MAX_FILES = parsePositiveIntegerEnv('MAX_FILES', DEFAULT_MAX_FILES);
+
+  // Multipart limits are a first line of defense; the upload route also enforces
+  // byte counts while streaming so the limits cannot be bypassed by malformed bodies.
   await app.register(fastifyMultipart, {
-    limits: {
-      fileSize: 10 * 1024 * 1024 * 1024, // 10GB
-    }
+    limits: { fileSize: MAX_FILE_SIZE, files: 1, fields: 4, parts: 5 }
   });
+
+  let activeUploads = 0;
+  let reservedUploadBytes = 0;
+
+  const getStoredBytes = async () => {
+    let total = 0;
+    for (const name of await fs.readdir(UPLOADS_DIR)) {
+      try {
+        const stat = await fs.stat(path.join(UPLOADS_DIR, name));
+        if (stat.isFile()) total += stat.size;
+      } catch { /* file may disappear during inspection */ }
+    }
+    return total;
+  };
+
+  const getMetadataCount = async () =>
+    (await fs.readdir(METADATA_DIR)).filter(name => name.endsWith('.json')).length;
 
   // --- Authentication / Sessions ---
   const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
@@ -423,45 +475,115 @@ async function start() {
   });
 
   app.post('/api/upload', async (request, reply) => {
-    const data = await request.file();
-    if (!data) return reply.code(400).send({ error: 'No data stream' });
+    if (activeUploads >= MAX_CONCURRENT_UPLOADS) {
+      return reply.code(429).send({ error: 'UPLOAD_BUSY', message: 'Too many uploads are active. Try again shortly.' });
+    }
 
-    const originalName = data.filename;
-    const timestamp = Date.now();
-    const extension = path.extname(originalName);
-    const nameWithoutExt = path.basename(originalName, extension).replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    
-    const storedName = `${timestamp}-${nameWithoutExt}-by-bibek${extension}`;
-    const filePath = path.join(UPLOADS_DIR, storedName);
-    const fileId = uuidv4();
+    const contentLength = Number(request.headers['content-length'] || 0);
+    const knownBodySize = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+    const currentStoredBytes = await getStoredBytes();
+    const metadataCount = await getMetadataCount();
 
-    const outStream = fs.createWriteStream(filePath);
-    
+    if (metadataCount >= MAX_FILES) return reply.code(413).send({ error: 'FILE_COUNT_LIMIT', message: 'Storage file limit reached.' });
+    if (knownBodySize > MAX_FILE_SIZE) return reply.code(413).send({ error: 'FILE_TOO_LARGE', message: 'File exceeds the maximum upload size.' });
+    if (knownBodySize > 0 && currentStoredBytes + reservedUploadBytes + knownBodySize > MAX_STORAGE_BYTES) {
+      return reply.code(413).send({ error: 'STORAGE_QUOTA_EXCEEDED', message: 'Storage quota exceeded.' });
+    }
+
+    activeUploads += 1;
+    reservedUploadBytes += knownBodySize;
+    let reservationReleased = false;
+    const releaseReservation = () => {
+      if (reservationReleased) return;
+      reservationReleased = true;
+      activeUploads = Math.max(0, activeUploads - 1);
+      reservedUploadBytes = Math.max(0, reservedUploadBytes - knownBodySize);
+    };
+
+    let filePath = '';
+    let fileId = '';
     try {
-      await new Promise((resolve, reject) => {
+      const data = await request.file();
+      if (!data) {
+        releaseReservation();
+        return reply.code(400).send({ error: 'NO_FILE', message: 'No file was provided.' });
+      }
+
+      const originalName = normalizeDisplayFilename(data.filename);
+      const extension = safeExtension(originalName);
+      const trustedMimeType = mime.lookup(originalName) || 'application/octet-stream';
+      fileId = uuidv4();
+
+      // User filenames never become filesystem paths. Storage uses an opaque UUID.
+      const storedName = `${fileId}${extension}`;
+      filePath = path.join(UPLOADS_DIR, storedName);
+      const outStream = fs.createWriteStream(filePath, { flags: 'wx' });
+      let bytesWritten = 0;
+      let limitError: Error | null = null;
+
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const fail = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          data.file.unpipe(outStream);
+          outStream.destroy();
+          reject(err);
+        };
+        data.file.on('data', (chunk: Buffer) => {
+          bytesWritten += chunk.length;
+          if (bytesWritten > MAX_FILE_SIZE || currentStoredBytes + (reservedUploadBytes - knownBodySize) + bytesWritten > MAX_STORAGE_BYTES) {
+            limitError = new Error('Upload resource limit exceeded');
+            data.file.destroy(limitError);
+          }
+        });
+        data.file.on('error', fail);
+        outStream.on('error', fail);
+        outStream.on('finish', () => {
+          if (!settled) { settled = true; resolve(); }
+        });
         data.file.pipe(outStream);
-        data.file.on('end', resolve);
-        data.file.on('error', reject);
       });
 
+      if (bytesWritten <= 0) {
+        await fs.remove(filePath);
+        releaseReservation();
+        return reply.code(400).send({ error: 'EMPTY_FILE', message: 'Empty files are not allowed.' });
+      }
+      if (limitError || bytesWritten > MAX_FILE_SIZE || currentStoredBytes + bytesWritten > MAX_STORAGE_BYTES) {
+        await fs.remove(filePath);
+        releaseReservation();
+        return reply.code(413).send({ error: 'STORAGE_LIMIT', message: 'Upload exceeds the configured resource limit.' });
+      }
+
       const stats = await fs.stat(filePath);
+      if (!stats.isFile() || stats.size !== bytesWritten) throw new Error('Uploaded file size could not be verified');
+
       const metadata = {
         id: fileId,
         originalName,
         storedName,
         fileSize: stats.size,
-        mimeType: data.mimetype || mime.lookup(extension) || 'application/octet-stream',
-        uploadDate: timestamp,
-        extension: extension.toLowerCase(),
+        // Never trust the browser's multipart MIME value.
+        mimeType: trustedMimeType,
+        uploadDate: Date.now(),
+        extension,
         lastModified: stats.mtimeMs,
       };
 
-      await fs.writeJson(path.join(METADATA_DIR, `${fileId}.json`), metadata);
+      await fs.writeJson(path.join(METADATA_DIR, `${fileId}.json`), metadata, { spaces: 2, flag: 'wx' });
+      releaseReservation();
       io.emit('file:uploaded', metadata);
       return metadata;
-    } catch (err) {
-      await fs.remove(filePath);
-      return reply.code(500).send({ error: 'Transfer corrupted' });
+    } catch (err: any) {
+      if (filePath) await fs.remove(filePath).catch(() => undefined);
+      if (fileId) await fs.remove(path.join(METADATA_DIR, `${fileId}.json`)).catch(() => undefined);
+      releaseReservation();
+      if (String(err?.message || '').includes('File too large') || String(err?.message || '').includes('resource limit')) {
+        return reply.code(413).send({ error: 'UPLOAD_LIMIT', message: 'Upload exceeds the configured resource limit.' });
+      }
+      request.log.error({ err }, 'Upload failed and partial data was cleaned up');
+      return reply.code(500).send({ error: 'TRANSFER_FAILED', message: 'Transfer could not be completed safely.' });
     }
   });
 
@@ -472,7 +594,11 @@ async function start() {
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
 
     const metadata = await fs.readJson(metadataPath);
+    if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
+      return reply.code(500).send({ error: 'INVALID_METADATA' });
+    }
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
+    if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
     const stats = await fs.stat(filePath);
 
     const safeDownloadName = String(metadata.originalName || 'download')
@@ -493,8 +619,16 @@ async function start() {
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
 
     const metadata = await fs.readJson(metadataPath);
+    if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
+      return reply.code(500).send({ error: 'INVALID_METADATA' });
+    }
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
+    if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
     const stats = await fs.stat(filePath);
+    const responseMime = typeof metadata.mimeType === 'string' ? metadata.mimeType : 'application/octet-stream';
+    if (!isPreviewableMime(responseMime)) {
+      return reply.code(415).send({ error: 'PREVIEW_NOT_SUPPORTED', message: 'This file type is download-only.' });
+    }
     const range = request.headers.range;
 
     if (range) {
@@ -526,7 +660,11 @@ async function start() {
     if (!await fs.pathExists(metadataPath)) return reply.code(404).send({ error: 'Missing' });
 
     const metadata = await fs.readJson(metadataPath);
+    if (!metadata || typeof metadata.storedName !== 'string' || path.basename(metadata.storedName) !== metadata.storedName) {
+      return reply.code(500).send({ error: 'INVALID_METADATA' });
+    }
     const filePath = path.join(UPLOADS_DIR, metadata.storedName);
+    if (!filePath.startsWith(`${UPLOADS_DIR}${path.sep}`)) return reply.code(400).send({ error: 'INVALID_STORAGE_PATH' });
 
     await fs.remove(filePath);
     await fs.remove(metadataPath);
@@ -580,7 +718,7 @@ async function start() {
   const PORT = 3000;
   try {
     await app.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`Nebula Core online at http://0.0.0.0:${PORT}`);
+    console.log(`OB Transfer server running on port ${PORT}`);
   } catch (err) {
     app.log.error(err);
     process.exit(1);

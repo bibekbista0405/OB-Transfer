@@ -15,3 +15,7 @@ coverage/
 # Runtime file uploads (never commit uploaded data)
 uploads/*
 !uploads/.gitkeep
+
+# Runtime metadata records (may contain private file information)
+metadata/*.json
+!metadata/.gitkeep

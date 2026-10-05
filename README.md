@@ -1,26 +1,28 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# OB Transfer
 
-# Run and deploy your AI Studio app
+OB Transfer is a self-hosted file transfer and media streaming application with authenticated access, protected realtime events, upload validation, storage limits, and browser security hardening.
 
-This contains everything you need to run your app locally.
+## Run locally
 
-View your app in AI Studio: https://ai.studio/apps/22af83a3-ded4-45f7-9232-289f295828b3
+Prerequisite: Node.js 20+
 
-## Run Locally
+1. Install dependencies: `npm install`
+2. Copy `.env.example` to `.env` and set your local values.
+3. Start development mode: `npm run dev`
 
-**Prerequisites:**  Node.js
+## Security configuration
 
+- `ACCESS_PASSWORD` — required access key. Never commit the real value.
+- `APP_URL` — exact browser origin allowed for CORS and Socket.IO.
+- `NODE_ENV` — use `production` for deployment.
+- `MAX_FILE_SIZE_BYTES` — maximum single upload size; defaults to 10 GiB.
+- `MAX_STORAGE_BYTES` — total runtime upload storage quota; defaults to 50 GiB.
+- `MAX_FILES` — maximum number of stored file records; defaults to 1000.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Runtime storage and Git
 
-## Git and runtime uploads
+The `uploads/` directory is runtime storage and is intentionally excluded from Git. Uploaded file data must never be committed. Only `uploads/.gitkeep` is tracked so the directory exists after cloning.
 
-The `uploads/` directory is runtime storage and is intentionally excluded from Git. Uploaded file data must never be committed to the repository. The repository keeps only `uploads/.gitkeep` so the directory exists after cloning.
+## Security notes
 
-If you clone OB Transfer, create or keep the local `uploads/` directory and let the server populate it with uploaded files.
+Authentication uses server-side sessions in an HttpOnly cookie. API and Socket.IO access require an authenticated session. Uploads are stored under opaque UUID-based filenames, independent of user filenames, and are checked against size, storage, concurrency, and file-count limits. Client-provided MIME types are not trusted for metadata or previews. Unsafe/unknown types are download-only rather than rendered inline.

@@ -1,5 +1,5 @@
 /**
- * Nebula Stream - Futuristic File Transfer Client
+ * OB Transfer - Futuristic File Transfer Client
  * (c) 2026 Bibek Bista
  */
 import confetti from 'canvas-confetti';
@@ -611,7 +611,7 @@ function openPreview(file) {
             const wrapper = document.createElement('div');
             wrapper.className = 'w-full h-full flex items-center justify-center bg-black rounded-xl overflow-hidden group';
             const video = document.createElement('video');
-            video.id = 'nebulaPlayer';
+            video.id = 'obTransferPlayer';
             video.src = viewUrl;
             video.className = 'w-full h-full max-h-[85vh] object-contain';
             video.controls = true;
@@ -645,7 +645,7 @@ function openPreview(file) {
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 text-[#00ff9c]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
                 </div>
                 <div id="visualizer" class="visualizer-container"></div>
-                <audio id="nebulaAudio" controls class="w-full"></audio>
+                <audio id="obTransferAudio" controls class="w-full"></audio>
                 <p class="text-[10px] font-mono text-[#00ff9c]/40 uppercase tracking-[0.4em]">Audio Frequency Stabilizer Active</p>
             `;
             const visualizer = card.querySelector('#visualizer');
@@ -654,7 +654,7 @@ function openPreview(file) {
                 bar.className = 'visualizer-bar';
                 visualizer.appendChild(bar);
             }
-            card.querySelector('#nebulaAudio').src = viewUrl;
+            card.querySelector('#obTransferAudio').src = viewUrl;
             container.appendChild(card);
             startVisualizer();
             break;
@@ -686,7 +686,7 @@ function openPreview(file) {
 }
 
 function startVisualizer() {
-    const audio = document.getElementById('nebulaAudio');
+    const audio = document.getElementById('obTransferAudio');
     const bars = document.querySelectorAll('.visualizer-bar');
     if (!audio || bars.length === 0) return;
 
@@ -719,8 +719,8 @@ function closePreview() {
     }
 
     // Stop audio/video playback immediately
-    const video = document.getElementById('nebulaPlayer');
-    const audio = document.getElementById('nebulaAudio');
+    const video = document.getElementById('obTransferPlayer');
+    const audio = document.getElementById('obTransferAudio');
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
     if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
 
