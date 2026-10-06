@@ -51,3 +51,7 @@ Phase 14 keeps the existing vanilla-JavaScript UI while separating shared fronte
 - `app.js` — UI orchestration, rendering, socket events, upload queue, and previews
 
 This is an internal architecture cleanup only; the existing UI and API contracts remain unchanged.
+## Phase 15 — Dependency cleanup
+
+The project dependency graph was audited and stale scaffold dependencies were removed. OB Transfer now keeps only packages required by the current Fastify/Socket.IO server, vanilla JavaScript frontend, Vite/Tailwind build, SQLite runtime, and supporting upload/storage features. The lockfile was pruned to match the manifest.
+
