@@ -38,5 +38,6 @@
   },
   "engines": {
     "node": ">=22.5.0"
-  }
+  },
+  "description": "Self-hosted authenticated file transfer and media streaming application."
 }
