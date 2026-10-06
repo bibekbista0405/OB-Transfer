@@ -55,6 +55,17 @@ const safeExtension = (filename: string) => {
 const isPreviewableMime = (value: string) =>
   /^(image\/(?:png|jpeg|gif|webp|bmp|avif)|video\/(?:mp4|webm|ogg)|audio\/(?:mpeg|mp4|ogg|wav|webm|aac)|application\/pdf)$/i.test(value);
 
+// Storage identifiers are generated UUIDs; never accept arbitrary path-like IDs.
+const isSafeFileId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+const isSafeStoredName = (value: unknown): value is string => {
+  if (typeof value !== 'string' || value.length > 255 || value.includes('/') || value.includes('\\')) return false;
+  const extension = path.extname(value);
+  const base = extension ? value.slice(0, -extension.length) : value;
+  return isSafeFileId(base) && (!extension || safeExtension(`file${extension}`) === extension.toLowerCase());
+};
+
 const metadataSchema = `
   CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
