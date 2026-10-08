@@ -36,6 +36,39 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 };
 
+const parsePort = (value: unknown, fallback = 3000) => {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : fallback;
+};
+
+const isPlaceholderPassword = (value: unknown) =>
+  typeof value === 'string' && /CHANGE_THIS_TO_A_STRONG_PRIVATE_PASSWORD|CHANGE_ME|REPLACE_ME/i.test(value);
+
+const validateRuntimeConfiguration = () => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const appUrl = process.env.APP_URL || 'http://localhost:3000';
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(appUrl);
+  } catch {
+    throw new Error('APP_URL must be a valid absolute URL.');
+  }
+
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error('APP_URL must use http:// or https://.');
+  }
+  if (isProduction && parsedUrl.protocol !== 'https:') {
+    throw new Error('Production requires APP_URL to use HTTPS.');
+  }
+
+  const password = process.env.ACCESS_PASSWORD;
+  if (isProduction && (!password || isPlaceholderPassword(password) || password.length < 16)) {
+    throw new Error('Production requires ACCESS_PASSWORD of at least 16 characters and not the example placeholder.');
+  }
+
+  return { appUrl: parsedUrl, port: parsePort(process.env.PORT, 3000) };
+};
+
 const normalizeDisplayFilename = (value: unknown) => {
   const input = typeof value === 'string' ? value.normalize('NFKC') : 'download';
   const withoutControls = Array.from(input).filter(char => {
@@ -296,9 +329,15 @@ async function start() {
   await fs.ensureDir(METADATA_DIR);
   await initDatabase();
 
+  const runtime = validateRuntimeConfiguration();
+  const isProduction = process.env.NODE_ENV === 'production';
   const app = fastify({
-    logger: true,
-    bodyLimit: 10 * 1024 * 1024,
+    logger: {
+      level: process.env.LOG_LEVEL || (isProduction ? 'info' : 'info'),
+      redact: { paths: ['req.headers.cookie', 'req.headers.authorization', 'res.headers["set-cookie"]'], remove: true },
+    },
+    bodyLimit: 1 * 1024 * 1024,
+    requestIdHeader: 'x-request-id',
   });
   appLogForStartup = (message: string) => app.log.info(message);
   const migratedLegacyRecords = await migrateJsonMetadata();
@@ -308,17 +347,29 @@ async function start() {
   // Security & Middleware
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.startsWith('/api')) {
-      app.log.info(`API Request: ${request.method} ${request.url}`);
+      app.log.info({ method: request.method, path: request.url.split('?')[0] }, 'API request');
     }
   });
 
   await app.register(middie);
-  const configuredAppUrl = process.env.APP_URL || 'http://localhost:3000';
+  const configuredAppUrl = runtime.appUrl.toString();
   const configuredUrl = new URL(configuredAppUrl);
   const configuredOrigin = configuredUrl.origin;
   const websocketOrigin = `${configuredUrl.protocol === 'https:' ? 'wss:' : 'ws:'}//${configuredUrl.host}`;
-  const allowedOrigins = new Set([configuredOrigin]);
   const isProduction = process.env.NODE_ENV === 'production';
+  const allowedOrigins = new Set([configuredOrigin]);
+  if (!isProduction) {
+    // Development commonly switches between localhost and 127.0.0.1.
+    // Keep both loopback origins local-only; production remains exact-origin.
+    if (configuredUrl.hostname === 'localhost') allowedOrigins.add(`${configuredUrl.protocol}//127.0.0.1:${configuredUrl.port}`);
+    if (configuredUrl.hostname === '127.0.0.1') allowedOrigins.add(`${configuredUrl.protocol}//localhost:${configuredUrl.port}`);
+  }
+  const allowedOriginList = [...allowedOrigins];
+  const websocketOrigins = [websocketOrigin];
+  if (!isProduction) {
+    if (configuredUrl.hostname === 'localhost') websocketOrigins.push(`ws://127.0.0.1:${configuredUrl.port}`);
+    if (configuredUrl.hostname === '127.0.0.1') websocketOrigins.push(`ws://localhost:${configuredUrl.port}`);
+  }
 
   // Browser security policy. Keep the policy explicit because the UI currently
   // depends on Socket.IO, canvas-confetti, and Google Fonts from known CDNs.
@@ -335,7 +386,7 @@ async function start() {
     fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
     imgSrc: ["'self'", 'data:', 'blob:'],
     mediaSrc: ["'self'", 'blob:'],
-    connectSrc: ["'self'", websocketOrigin],
+    connectSrc: ["'self'", ...websocketOrigins, 'https://cdn.socket.io'],
     workerSrc: ["'self'", 'blob:'],
   };
 
@@ -508,12 +559,14 @@ async function start() {
   // Socket.io
   const io = new Server(app.server, {
     cors: {
-      origin: configuredOrigin,
+      origin: allowedOriginList,
       credentials: true,
     },
     allowRequest: (request, callback) => {
       const origin = request.headers.origin;
-      if (!origin) return callback('Origin required', false);
+      // Same-origin Socket.IO requests can legitimately omit Origin.
+      // When Origin is present, it must match the configured/local-dev allowlist.
+      if (!origin) return callback(null, true);
       if (allowedOrigins.has(origin.replace(/\/$/, ''))) return callback(null, true);
       return callback('Origin not allowed', false);
     },
@@ -903,7 +956,10 @@ async function start() {
   let vite: any;
   if (process.env.NODE_ENV !== 'production') {
     vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server: app.server },
+      },
       appType: 'custom',
     });
     // Still use middie for Vite's static asset serving
@@ -941,14 +997,43 @@ async function start() {
     }
   });
 
-  const PORT = 3000;
+  app.get('/healthz', async () => ({ status: 'ok' }));
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    app.log.info({ signal }, 'OB Transfer shutting down');
+    clearInterval(loginFailureCleanupTimer);
+    clearInterval(sessionCleanupTimer);
+    clearInterval(socketSessionCleanupTimer);
+    io.disconnectSockets(true);
+    try {
+      if (vite) await vite.close();
+      await app.close();
+    } catch (error) {
+      app.log.error(error, 'Graceful shutdown failed');
+      process.exitCode = 1;
+    } finally {
+      try { db?.close(); } catch { /* already closed */ }
+    }
+  };
+
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+
+  const PORT = runtime.port;
   try {
-    await app.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`OB Transfer server running on port ${PORT}`);
+    await app.listen({ port: PORT, host: process.env.HOST || '0.0.0.0' });
+    app.log.info({ port: PORT, environment: process.env.NODE_ENV || 'development' }, 'OB Transfer server started');
   } catch (err) {
-    app.log.error(err);
+    app.log.error(err, 'OB Transfer failed to start');
+    try { db?.close(); } catch { /* ignore cleanup error */ }
     process.exit(1);
   }
 }
 
-start();
+start().catch((error) => {
+  console.error('OB Transfer startup failed:', error instanceof Error ? error.message : error);
+  process.exit(1);
+});

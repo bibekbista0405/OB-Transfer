@@ -8,7 +8,8 @@
     "build": "vite build && cross-env NODE_ENV=production esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node tests/security-regression.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

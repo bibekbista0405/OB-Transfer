@@ -2,7 +2,7 @@
 
 OB Transfer is a self-hosted file transfer and media streaming application built for private, authenticated file sharing. It provides a browser-based interface for uploading, browsing, previewing, downloading, and deleting files while enforcing server-side authentication, storage limits, safe file handling, protected realtime events, and browser security controls.
 
-> **Project status:** Security hardening and architecture work are being completed incrementally. This repository is currently at **Phase 17 of 20** in the project hardening roadmap.
+> **Project status:** Security hardening and architecture work are being completed incrementally. This repository is currently at **Phase 19 of 20** in the project hardening roadmap.
 
 ## Features
 
@@ -102,6 +102,28 @@ Set `NODE_ENV=production` and use an HTTPS `APP_URL` when deploying behind TLS.
 | `MAX_STORAGE_BYTES` | No | `53687091200` | Maximum total runtime storage. Default: 50 GiB. |
 | `MAX_FILES` | No | `1000` | Maximum number of stored file records. |
 | `DISABLE_HMR` | No | `false` | Disables Vite HMR/watch behavior when required by a restricted development environment. |
+| `PORT` | No | `3000` | HTTP port used by the application server. |
+| `HOST` | No | `0.0.0.0` | Network interface used by the application server. |
+| `LOG_LEVEL` | No | `info` | Fastify/Pino log level. |
+
+## Production hardening
+
+Production startup fails closed when critical configuration is unsafe. With `NODE_ENV=production`, OB Transfer requires:
+
+- an absolute HTTPS `APP_URL`
+- an `ACCESS_PASSWORD` that is at least 16 characters and is not the example placeholder
+- runtime storage limits appropriate for the host
+
+Additional operational protections include:
+
+- bounded request bodies
+- redaction of cookies, authorization headers, and response `Set-Cookie` values from structured logs
+- configurable host, port, and log level
+- graceful shutdown on `SIGINT` and `SIGTERM`
+- cleanup of realtime sockets, Vite, Fastify, and SQLite resources during shutdown
+- a minimal unauthenticated `GET /healthz` endpoint for service health checks
+
+For production deployments, terminate TLS at a trusted reverse proxy or load balancer and set `APP_URL` to the public HTTPS origin. Keep `.env`, the SQLite database, and uploaded files outside version control and back them up using your deployment's secure storage process.
 
 ### Password guidance
 

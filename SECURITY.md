@@ -38,3 +38,9 @@ Operators should:
 ## Disclosure
 
 Please allow reasonable time for the maintainer to investigate and address a reported vulnerability before public disclosure.
+
+### Development WebSocket security
+
+Development HMR is attached to the OB Transfer application server rather than exposing a separate Vite HMR port. Socket.IO and HMR therefore remain on the application origin, while CSP permits only the configured application WebSocket origin (plus controlled loopback aliases in development).
+
+The project includes `npm test`, a source-level security regression suite covering these controls and other previously hardened areas.
