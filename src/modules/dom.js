@@ -1,5 +1,10 @@
 export const el = {
     dropZone: document.getElementById('dropZone'),
+    themeToggle: document.getElementById('themeToggle'),
+    categoryFilters: document.getElementById('categoryFilters'),
+    fileSort: document.getElementById('fileSort'),
+    gridViewBtn: document.getElementById('gridViewBtn'),
+    listViewBtn: document.getElementById('listViewBtn'),
     fileInput: document.getElementById('fileInput'),
     uploadQueue: document.getElementById('uploadQueue'),
     fileList: document.getElementById('fileList'),

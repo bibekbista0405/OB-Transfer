@@ -12,6 +12,8 @@ const vite = read('vite.config.ts');
 const html = read('index.html');
 const gitignore = read('.gitignore');
 const pkg = JSON.parse(read('package.json'));
+const css = read('src/style.css');
+const env = read('.env');
 
 function check(name, condition) {
   assert.ok(condition, name);
@@ -49,4 +51,18 @@ for (const file of ['src/app.js', 'src/modules/api.js', 'src/modules/constants.j
   console.log(`PASS  JavaScript syntax: ${file}`);
 }
 
-console.log('\nAll Phase 20 final security audit regression checks passed.');
+
+check('requested local development password is configured', /^ACCESS_PASSWORD=bibekbista$/m.test(env));
+check('default password is not placed in the committed env template', !/^ACCESS_PASSWORD=bibekbista$/m.test(read('.env.example')));
+check('media-first gallery supports all and dedicated media filters', ['all', 'image', 'video', 'audio', 'document'].every(category => html.includes(`data-category="${category}"`)));
+check('theme toggle persists light/dark preference without storing credentials', /ob-transfer-theme/.test(app) && /applyTheme\(ui\.theme === 'dark' \? 'light' : 'dark'\)/.test(app) && !/localStorage.*password/i.test(app));
+check('gallery has sorting and grid/list layout controls', /id="fileSort"/.test(html) && /id="gridViewBtn"/.test(html) && /id="listViewBtn"/.test(html) && /data-layout="list"/.test(css));
+check('photo thumbnails lazy-load and decode asynchronously', /image\.loading = 'lazy'/.test(app) && /image\.decoding = 'async'/.test(app));
+check('video gallery thumbnails load lazily near the viewport', /new IntersectionObserver/.test(app) && /videoThumb\.preload = 'metadata'/.test(app) && /rootMargin: '180px 0px'/.test(app));
+check('preview failures show recoverable guidance', /PREVIEW UNAVAILABLE/.test(app) && /Try downloading the original file/.test(app));
+check('upload success schedules authoritative file-list refresh', /scheduleFileSync\(\)/.test(app) && /ui\.refreshTimer = setTimeout\(\(\) => \{ ui\.refreshTimer = null; fetchFiles\(\); \}, 250\)/.test(app));
+check('upload concurrency slots are released once, including cancellation', /releaseUploadSlot/.test(app) && !/state\.activeUploads--/.test(app) && /xhr\.addEventListener\('abort'/.test(app));
+check('existing mobile video player controls and inline playback remain unchanged', /video\.controls = true;/.test(app) && /video\.playsInline = true;/.test(app) && /video\.preload = 'auto';/.test(app) && /video\.className = 'w-full h-full max-h-\[85vh\] object-contain';/.test(app));
+check('reduced-motion preference is respected', /prefers-reduced-motion: reduce/.test(css) && /prefers-reduced-motion: reduce/.test(app));
+
+console.log('\nAll Phase 22 security, UX, and regression checks passed.');

@@ -9,13 +9,33 @@ import { state } from './modules/state.js';
 import { el } from './modules/dom.js';
 import { api } from './modules/api.js';
 
-const ui = { search: '', authBusy: false };
+const ui = { search: '', category: 'all', sort: 'newest', layout: 'grid', theme: 'dark', authBusy: false, refreshTimer: null };
+let thumbnailObserver = null;
 
 // --- Initialization ---
 function init() {
+    setupTheme();
     setupEventListeners();
     createParticles();
     checkAuth();
+}
+
+function setupTheme() {
+    let saved = 'dark';
+    try { saved = localStorage.getItem('ob-transfer-theme') || 'dark'; } catch { /* storage can be disabled */ }
+    applyTheme(saved === 'light' ? 'light' : 'dark');
+}
+
+function applyTheme(theme) {
+    ui.theme = theme;
+    document.documentElement.dataset.theme = theme;
+    document.body.dataset.theme = theme;
+    if (el.themeToggle) {
+        const next = theme === 'dark' ? 'light' : 'dark';
+        el.themeToggle.setAttribute('aria-label', `Switch to ${next} theme`);
+        el.themeToggle.title = `Switch to ${next} theme`;
+    }
+    try { localStorage.setItem('ob-transfer-theme', theme); } catch { /* theme still works for this session */ }
 }
 
 // --- Authentication ---
@@ -83,6 +103,11 @@ function setAuthBusy(busy) {
 
 // --- Socket.IO ---
 function setupSocket() {
+    // Reuse the existing client so repeated authentication flows cannot multiply listeners.
+    if (state.socket) {
+        if (!state.socket.connected) state.socket.connect();
+        return;
+    }
     // io is loaded globally from the script tag in index.html
     state.socket = window.io();
     
@@ -153,7 +178,10 @@ async function fetchFiles() {
             return;
         }
         
-        state.files = await res.json();
+        if (!res.ok) throw new Error(`File sync failed (${res.status})`);
+        const payload = await res.json();
+        if (!Array.isArray(payload)) throw new Error('Unexpected file list response');
+        state.files = payload;
         renderFileList();
     } catch (err) {
         console.error('Failed to fetch files:', err);
@@ -163,86 +191,175 @@ async function fetchFiles() {
     }
 }
 
+function fileCategory(file) {
+    const mime = String(file.mimeType || '').toLowerCase();
+    const ext = String(file.extension || file.originalName?.split('.').pop() || '').toLowerCase().replace(/^\./, '');
+    if (mime.startsWith('image/') || ['jpg','jpeg','png','gif','webp','bmp','svg','avif','heic','heif','tif','tiff'].includes(ext)) return 'image';
+    if (mime.startsWith('video/') || ['mp4','mov','avi','mkv','webm','m4v','mpeg','mpg','3gp'].includes(ext)) return 'video';
+    if (mime.startsWith('audio/') || ['mp3','wav','ogg','m4a','aac','flac','opus'].includes(ext)) return 'audio';
+    return 'document';
+}
+
 function renderFileList() {
-    el.fileList.innerHTML = '';
-    
+    el.fileList.replaceChildren();
     const count = document.getElementById('fileCount');
     const storage = document.getElementById('storageUsed');
     if (count) count.textContent = state.files.length.toLocaleString();
-    if (storage) storage.textContent = formatBytes(state.files.reduce((total, file) => total + Number(file.fileSize || 0), 0));
-
-    if (state.files.length === 0) {
-        el.emptyState.classList.remove('hidden');
-        return;
-    } else {
-        el.emptyState.classList.add('hidden');
-    }
+    if (storage) storage.textContent = formatBytes(state.files.reduce((total, file) => total + Math.max(0, Number(file.fileSize) || 0), 0));
 
     const query = ui.search.trim().toLowerCase();
-    const visibleFiles = query
-        ? state.files.filter(file => String(file.originalName || '').toLowerCase().includes(query) || String(file.extension || '').toLowerCase().includes(query))
-        : state.files;
+    const visibleFiles = state.files.filter(file => {
+        const matchesQuery = !query || String(file.originalName || '').toLowerCase().includes(query) || String(file.extension || '').toLowerCase().includes(query) || String(file.mimeType || '').toLowerCase().includes(query);
+        const matchesCategory = ui.category === 'all' || fileCategory(file) === ui.category;
+        return matchesQuery && matchesCategory;
+    });
+    visibleFiles.sort((a, b) => {
+        if (ui.sort === 'name') return String(a.originalName || '').localeCompare(String(b.originalName || ''), undefined, { sensitivity: 'base' });
+        if (ui.sort === 'size') return (Number(b.fileSize) || 0) - (Number(a.fileSize) || 0);
+        const dateDiff = (Number(b.uploadDate) || 0) - (Number(a.uploadDate) || 0);
+        return ui.sort === 'oldest' ? -dateDiff : dateDiff;
+    });
 
-    if (visibleFiles.length === 0) {
+    if (state.files.length === 0) {
+        el.emptyState.querySelector('h3').textContent = 'Your library is ready';
+        el.emptyState.querySelector('p').textContent = 'Upload a photo, video, or file to start building your private library.';
         el.emptyState.classList.remove('hidden');
-        el.emptyState.querySelector('h3').textContent = query ? 'No Matches' : 'No Files Yet';
-        el.emptyState.querySelector('p').textContent = query ? 'Try a different filename or extension.' : 'Your transfer library is empty. Add a file to get started.';
+        el.fileList.classList.add('hidden');
+        return;
+    }
+    if (visibleFiles.length === 0) {
+        el.emptyState.querySelector('h3').textContent = 'Nothing here yet';
+        el.emptyState.querySelector('p').textContent = query ? 'Try another search or clear your filters.' : 'There are no files in this category yet.';
+        el.emptyState.classList.remove('hidden');
+        el.fileList.classList.add('hidden');
         return;
     }
 
     el.emptyState.classList.add('hidden');
-    visibleFiles.forEach(file => {
-        const card = createFileCard(file);
-        el.fileList.appendChild(card);
-    });
-
+    el.fileList.classList.remove('hidden');
+    const fragment = document.createDocumentFragment();
+    visibleFiles.forEach(file => fragment.appendChild(createFileCard(file)));
+    el.fileList.appendChild(fragment);
 }
 
 function createFileCard(file) {
-    const div = document.createElement('div');
-    div.className = 'mobile-card flex items-center gap-4 group cursor-pointer active:scale-[0.99] transition-all';
-    div.tabIndex = 0;
-    div.setAttribute('role', 'button');
-    div.setAttribute('aria-label', `Preview ${file.originalName || 'file'}`);
-
-    const ext = (file.extension || 'bin').replace('.', '');
-    const dateStr = new Date(file.uploadDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const category = fileCategory(file);
+    const ext = String(file.extension || '').replace(/^\./, '').toUpperCase() || category.toUpperCase();
+    const dateStr = Number(file.uploadDate) ? new Date(Number(file.uploadDate)).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unavailable';
     const size = formatBytes(file.fileSize);
+    const viewUrl = `/api/files/${encodeURIComponent(file.id)}/view`;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `media-card media-card--${category}`;
+    card.setAttribute('aria-label', `Preview ${file.originalName || 'file'}`);
 
-    const iconWrap = document.createElement('div');
-    iconWrap.className = 'w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center shrink-0 border border-white/5 group-hover:border-[#00ff9c]/30 transition-colors';
-    const iconHolder = document.createElement('div');
-    iconHolder.innerHTML = getFileIcon(ext); // application-owned static SVG only
-    iconWrap.appendChild(iconHolder);
+    const art = document.createElement('span');
+    art.className = `media-art media-art--${category}`;
+    art.setAttribute('aria-hidden', 'true');
+    if (category === 'image') {
+        const image = document.createElement('img');
+        image.className = 'media-thumb';
+        image.src = viewUrl;
+        image.alt = '';
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.addEventListener('error', () => {
+            image.remove();
+            art.classList.add('media-art--unavailable');
+            art.appendChild(createArtGlyph(category, ext));
+        }, { once: true });
+        art.appendChild(image);
+    } else if (category === 'video') {
+        const videoThumb = document.createElement('video');
+        videoThumb.className = 'media-thumb media-video-thumb';
+        videoThumb.dataset.src = viewUrl;
+        videoThumb.muted = true;
+        videoThumb.playsInline = true;
+        videoThumb.preload = 'metadata';
+        videoThumb.tabIndex = -1;
+        videoThumb.setAttribute('aria-hidden', 'true');
+        const fallbackGlyph = createArtGlyph(category, ext);
+        art.append(videoThumb, fallbackGlyph);
+        videoThumb.addEventListener('loadeddata', () => fallbackGlyph.remove(), { once: true });
+        videoThumb.addEventListener('error', () => videoThumb.remove(), { once: true });
+        if ('IntersectionObserver' in window) {
+            if (!thumbnailObserver) {
+                thumbnailObserver = new IntersectionObserver(entries => {
+                    entries.forEach(entry => {
+                        if (!entry.isIntersecting) return;
+                        const target = entry.target;
+                        if (target.dataset.src && !target.src) {
+                            target.src = target.dataset.src;
+                            target.removeAttribute('data-src');
+                        }
+                        thumbnailObserver.unobserve(target);
+                    });
+                }, { rootMargin: '180px 0px' });
+            }
+            thumbnailObserver.observe(videoThumb);
+        } else {
+            videoThumb.src = viewUrl;
+        }
+    } else {
+        art.appendChild(createArtGlyph(category, ext));
+    }
 
-    const content = document.createElement('div');
-    content.className = 'flex-grow min-w-0';
-    const name = document.createElement('h4');
-    name.className = 'font-bold text-sm truncate uppercase tracking-tight group-hover:text-[#00ff9c] transition-colors';
+    const badge = document.createElement('span');
+    badge.className = 'media-type-badge';
+    badge.textContent = category === 'image' ? 'PHOTO' : category === 'video' ? 'VIDEO' : category === 'audio' ? 'AUDIO' : ext;
+    art.appendChild(badge);
+    if (category === 'video') {
+        const play = document.createElement('span');
+        play.className = 'media-play-badge';
+        play.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8c0-.8.9-1.3 1.6-.9l9.1 5.2a1 1 0 0 1 0 1.8l-9.1 5.2c-.7.4-1.6-.1-1.6-.9V5.8Z" fill="currentColor"/></svg>';
+        art.appendChild(play);
+    }
+
+    const info = document.createElement('span');
+    info.className = 'media-info';
+    const top = document.createElement('span');
+    top.className = 'media-info-top';
+    const name = document.createElement('span');
+    name.className = 'media-name';
     name.textContent = file.originalName || 'Unnamed file';
-    const meta = document.createElement('div');
-    meta.className = 'flex items-center gap-2 mt-0.5';
-    const sizeSpan = document.createElement('span');
-    sizeSpan.className = 'text-[10px] text-gray-500 font-mono uppercase';
-    sizeSpan.textContent = size;
-    const dot = document.createElement('span');
-    dot.className = 'w-1 h-1 rounded-full bg-white/10';
-    const dateSpan = document.createElement('span');
-    dateSpan.className = 'text-[10px] text-gray-500 font-mono uppercase';
-    dateSpan.textContent = dateStr;
-    meta.append(sizeSpan, dot, dateSpan);
-    content.append(name, meta);
+    name.title = file.originalName || 'Unnamed file';
+    const icon = document.createElement('span');
+    icon.className = 'media-open-icon';
+    icon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    top.append(name, icon);
+    const meta = document.createElement('span');
+    meta.className = 'media-meta';
+    const sizeLabel = document.createElement('span');
+    sizeLabel.textContent = size;
+    const separator = document.createElement('span');
+    separator.className = 'meta-separator';
+    separator.textContent = '·';
+    const dateLabel = document.createElement('span');
+    dateLabel.textContent = dateStr;
+    meta.append(sizeLabel, separator, dateLabel);
+    info.append(top, meta);
+    card.append(art, info);
+    card.addEventListener('click', () => openPreview(file));
+    return card;
+}
 
-    const arrow = document.createElement('div');
-    arrow.className = 'p-2 text-gray-700';
-    arrow.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>';
-    div.append(iconWrap, content, arrow);
-    const open = () => openPreview(file);
-    div.addEventListener('click', open);
-    div.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
-    });
-    return div;
+function createArtGlyph(category, extension) {
+    const glyph = document.createElement('span');
+    glyph.className = `media-art-glyph media-art-glyph--${category}`;
+    const paths = {
+        video: '<rect x="3" y="5" width="13" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m16 10 5-3v10l-5-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+        audio: '<path d="M9 18V5l11-2v13" fill="none" stroke="currentColor" stroke-width="1.5"/><ellipse cx="6" cy="18" rx="3" ry="2" fill="none" stroke="currentColor" stroke-width="1.5"/><ellipse cx="17" cy="16" rx="3" ry="2" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+        document: '<path d="M7 3h7l5 5v13H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M14 3v6h5M9 13h6M9 17h6" fill="none" stroke="currentColor" stroke-width="1.5"/>'
+    };
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.innerHTML = paths[category] || paths.document;
+    const label = document.createElement('span');
+    label.className = 'media-art-extension';
+    label.textContent = String(extension || category).slice(0, 6);
+    glyph.append(svg, label);
+    return glyph;
 }
 
 function addToQueue(files) {
@@ -480,6 +597,11 @@ function processQueue() {
     processQueue(); // Try to start more if possible
 }
 
+function scheduleFileSync() {
+    if (ui.refreshTimer) clearTimeout(ui.refreshTimer);
+    ui.refreshTimer = setTimeout(() => { ui.refreshTimer = null; fetchFiles(); }, 250);
+}
+
 function uploadFile(item) {
     if (!item || !item.file) return;
 
@@ -488,6 +610,13 @@ function uploadFile(item) {
 
     const xhr = new XMLHttpRequest();
     item.xhr = xhr;
+    let slotReleased = false;
+    const releaseUploadSlot = () => {
+        if (slotReleased) return false;
+        slotReleased = true;
+        state.activeUploads = Math.max(0, state.activeUploads - 1);
+        return true;
+    };
 
     xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable && item.startTime) {
@@ -522,16 +651,17 @@ function uploadFile(item) {
 
     xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {
+            releaseUploadSlot();
             item.status = 'completed';
             item.progress = 100;
-            showToast('UPLINK SUCCESSFUL', `${item.file.name} deployed.`, 'success');
-            triggerConfetti();
+            showToast('UPLOAD COMPLETE', `${item.file.name} is ready in your library.`, 'success');
+            scheduleFileSync();
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) triggerConfetti();
         } else {
             handleFailure(`Error transferring ${item.file.name}.`);
             return;
         }
         
-        state.activeUploads--;
         renderQueue();
         
         // Auto-remove completed items from queue after some time
@@ -566,10 +696,20 @@ function uploadFile(item) {
             item.status = 'failed';
             showToast('UPLINK FAILED', errorMsg, 'error');
         }
-        state.activeUploads--;
+        releaseUploadSlot();
         renderQueue();
         processQueue();
     }
+
+    xhr.addEventListener('abort', () => {
+        if (item.cancelled) {
+            releaseUploadSlot();
+            renderQueue();
+            processQueue();
+        } else {
+            handleFailure(`Upload cancelled unexpectedly: ${item.file.name}.`);
+        }
+    });
 
     xhr.open('POST', '/api/upload');
     xhr.send(formData);
@@ -620,6 +760,7 @@ function openPreview(file) {
             video.playsInline = true;
             video.autoplay = true;
             video.preload = 'auto';
+            video.addEventListener('error', () => showToast('PREVIEW UNAVAILABLE', 'This video could not be played in the browser. Try downloading the original file.', 'warning'), { once: true });
             wrapper.appendChild(video);
             container.appendChild(wrapper);
             setTimeout(() => video.play().catch(e => console.log('Autoplay blocked:', e)), 50);
@@ -635,6 +776,7 @@ function openPreview(file) {
             image.src = viewUrl;
             image.className = 'media-preview-image shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)] rounded-xl z-10';
             image.alt = file.originalName || 'File preview';
+            image.addEventListener('error', () => showToast('PREVIEW UNAVAILABLE', 'This image could not be displayed. Try downloading the original file.', 'warning'), { once: true });
             wrapper.append(blur, image);
             container.appendChild(wrapper);
             break;
@@ -656,7 +798,9 @@ function openPreview(file) {
                 bar.className = 'visualizer-bar';
                 visualizer.appendChild(bar);
             }
-            card.querySelector('#obTransferAudio').src = viewUrl;
+            const audio = card.querySelector('#obTransferAudio');
+            audio.src = viewUrl;
+            audio.addEventListener('error', () => showToast('PREVIEW UNAVAILABLE', 'This audio file could not be played in the browser.', 'warning'), { once: true });
             container.appendChild(card);
             startVisualizer();
             break;
@@ -751,7 +895,8 @@ async function deleteFile(id) {
 
 // --- Utils ---
 function formatBytes(bytes, decimals = 2) {
-    if (bytes === 0) return '0 B';
+    bytes = Number(bytes);
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -895,6 +1040,37 @@ function setupEventListeners() {
         renderFileList();
     });
 
+    el.categoryFilters?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-category]');
+        if (!button) return;
+        ui.category = button.dataset.category || 'all';
+        el.categoryFilters.querySelectorAll('[data-category]').forEach(chip => {
+            const active = chip === button;
+            chip.classList.toggle('is-active', active);
+            chip.setAttribute('aria-pressed', String(active));
+        });
+        renderFileList();
+    });
+
+    el.fileSort?.addEventListener('change', event => {
+        ui.sort = event.target.value;
+        renderFileList();
+    });
+
+    const setLayout = layout => {
+        ui.layout = layout;
+        document.body.dataset.layout = layout;
+        [[el.gridViewBtn, 'grid'], [el.listViewBtn, 'list']].forEach(([button, value]) => {
+            if (!button) return;
+            const active = value === layout;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
+    };
+    el.gridViewBtn?.addEventListener('click', () => setLayout('grid'));
+    el.listViewBtn?.addEventListener('click', () => setLayout('list'));
+    el.themeToggle?.addEventListener('click', () => applyTheme(ui.theme === 'dark' ? 'light' : 'dark'));
+
     const refresh = document.getElementById('refreshBtn');
     refresh?.addEventListener('click', async () => {
         refresh.disabled = true;
@@ -916,6 +1092,7 @@ function setupEventListeners() {
     let dragCounter = 0;
 
     document.body.addEventListener('dragenter', (e) => {
+        if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
         e.preventDefault();
         dragCounter++;
         if (dragCounter === 1) {
@@ -926,12 +1103,13 @@ function setupEventListeners() {
     });
 
     document.body.addEventListener('dragover', (e) => {
-        e.preventDefault();
+        if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault();
     });
 
     document.body.addEventListener('dragleave', (e) => {
+        if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
         e.preventDefault();
-        dragCounter--;
+        dragCounter = Math.max(0, dragCounter - 1);
         if (dragCounter === 0) {
             el.dragDropOverlay.classList.add('opacity-0', 'pointer-events-none');
             el.dragDropContent.classList.remove('scale-100');
@@ -940,6 +1118,7 @@ function setupEventListeners() {
     });
 
     document.body.addEventListener('drop', (e) => {
+        if (!e.dataTransfer?.files?.length) return;
         e.preventDefault();
         dragCounter = 0;
         el.dragDropOverlay.classList.add('opacity-0', 'pointer-events-none');
@@ -970,7 +1149,7 @@ function setupEventListeners() {
         if (removeBtn) {
             const id = removeBtn.dataset.id;
             const item = state.uploadQueue.find(i => i.id === id);
-            if (item && item.xhr) item.xhr.abort();
+            if (item && item.xhr) { item.cancelled = true; item.xhr.abort(); }
             state.uploadQueue = state.uploadQueue.filter(i => i.id !== id);
             renderQueue();
         }

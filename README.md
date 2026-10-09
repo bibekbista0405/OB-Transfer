@@ -2,7 +2,7 @@
 
 OB Transfer is a self-hosted file transfer and media streaming application built for private, authenticated file sharing. It provides a browser-based interface for uploading, browsing, previewing, downloading, and deleting files while enforcing server-side authentication, storage limits, safe file handling, protected realtime events, and browser security controls.
 
-> **Project status:** Security hardening and architecture work are being completed incrementally. This repository is currently at **Phase 21 frontend UX refinement** in the project hardening roadmap.
+> **Project status:** Security hardening and architecture work are being completed incrementally. This repository is currently at **Phase 22 media-first library and UI/UX refinement** in the project hardening roadmap.
 
 ## Features
 
@@ -19,6 +19,9 @@ OB Transfer is a self-hosted file transfer and media streaming application built
 - Startup storage reconciliation and safe orphan recovery
 - Content Security Policy and hardened browser security headers
 - Restricted CORS and Socket.IO origins
+- Media-first responsive gallery with dedicated photo/video/audio/document filters
+- Persistent light and dark themes, grid/list layouts, search, and sorting
+- Lazy-loaded image thumbnails and an accessible media-card experience
 - Vanilla JavaScript frontend with separated application modules
 - Runtime upload/database data excluded from Git
 
@@ -54,7 +57,7 @@ npm install
 
 ### 2. Configure the environment
 
-A local `.env` file is included for development and is intentionally ignored by Git. Before using the application, replace the placeholder `ACCESS_PASSWORD` with a strong private password.
+A local `.env` file is included for development and is intentionally ignored by Git. Its development access password is `bibekbista` for your requested local setup. Change it before sharing the app with anyone or exposing it to a network. Never use this default in production.
 
 For a fresh clone, create the file from the template:
 
@@ -111,7 +114,7 @@ Set `NODE_ENV=production` and use an HTTPS `APP_URL` when deploying behind TLS.
 
 Phase 20 completes the cumulative security review. The final audit re-checks authentication and session handling, API authorization, Socket.IO origin/authentication, CSP and security headers, CORS, XSS-sensitive DOM paths, upload and filesystem validation, storage quotas and concurrency, range streaming, SQLite metadata integrity, login abuse protection, environment/secrets handling, runtime Git exclusions, production startup/shutdown, project identity, and regression coverage.
 
-The final regression suite is available through `npm test` and includes a startup regression check preventing duplicate `isProduction` declarations in `start()`.
+The regression suite is available through `npm test`. It includes the final startup regression check and Phase 22 UI/upload behavior checks. The existing mobile video player markup and playback behavior are intentionally preserved during the gallery redesign.
 
 
 Production startup fails closed when critical configuration is unsafe. With `NODE_ENV=production`, OB Transfer requires:

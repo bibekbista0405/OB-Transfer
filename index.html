@@ -8,7 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/style.css">
 </head>
-<body class="bg-[#0a0f1c] text-white font-['Space_Grotesk'] overflow-x-hidden min-h-screen">
+<body data-theme="dark" data-layout="grid" class="bg-[#0a0f1c] text-white font-['Space_Grotesk'] overflow-x-hidden min-h-screen">
     
     <!-- Background Effects -->
     <div class="fixed inset-0 pointer-events-none z-[-1]">
@@ -67,6 +67,10 @@
         </div>
         
         <div class="flex items-center gap-3">
+            <button id="themeToggle" type="button" class="theme-toggle" aria-label="Switch to light theme" title="Switch theme">
+                <svg class="theme-icon theme-icon-sun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path stroke-linecap="round" d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+                <svg class="theme-icon theme-icon-moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M20.9 13A8.5 8.5 0 0 1 11 3.1 8.5 8.5 0 1 0 20.9 13Z"/></svg>
+            </button>
             <div class="flex flex-col items-end">
                 <div class="flex items-center gap-1.5">
                     <span id="socketStatus" class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
@@ -87,9 +91,9 @@
             <div class="mb-7">
                 <div class="flex items-start justify-between gap-4">
                     <div>
-                        <p class="section-kicker">Your files</p>
-                        <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Explorer</h2>
-                        <p class="text-gray-500 text-xs mt-1">Browse, preview and download your transferred files.</p>
+                        <p class="section-kicker">Your private library</p>
+                        <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Your media, <span class="headline-accent">in one place.</span></h2>
+                        <p class="text-gray-500 text-sm mt-2">A calmer space for every photo, video, and file you keep.</p>
                     </div>
                     <button id="refreshBtn" type="button" aria-label="Refresh files" title="Refresh files" class="icon-button">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -99,13 +103,36 @@
                 </div>
                 <div class="explorer-tools mt-6">
                     <label class="search-box" for="fileSearch">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35m2.1-5.15a7.25 7.25 0 1 1-14.5 0 7.25 7.25 0 0 1 14.5 0Z" /></svg>
-                        <input id="fileSearch" type="search" placeholder="Search files..." autocomplete="off" aria-label="Search files">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-4.35-4.35m2.1-5.15a7.25 7.25 0 1 1-14.5 0 7.25 7.25 0 0 1 14.5 0Z" /></svg>
+                        <input id="fileSearch" type="search" placeholder="Search your library..." autocomplete="off" aria-label="Search files">
                     </label>
                     <div class="stats-strip" aria-label="Storage summary">
                         <span><strong id="fileCount">0</strong> files</span>
                         <span class="stats-dot"></span>
                         <span><strong id="storageUsed">0 B</strong> stored</span>
+                    </div>
+                </div>
+                <div class="library-controls" aria-label="Library controls">
+                    <div id="categoryFilters" class="category-filters" role="group" aria-label="Filter by file type">
+                        <button type="button" class="category-chip is-active" data-category="all" aria-pressed="true">All files</button>
+                        <button type="button" class="category-chip" data-category="image" aria-pressed="false">Photos</button>
+                        <button type="button" class="category-chip" data-category="video" aria-pressed="false">Videos</button>
+                        <button type="button" class="category-chip" data-category="audio" aria-pressed="false">Audio</button>
+                        <button type="button" class="category-chip" data-category="document" aria-pressed="false">Documents</button>
+                    </div>
+                    <div class="library-actions">
+                        <label class="sort-control" for="fileSort"><span>Sort</span>
+                            <select id="fileSort" aria-label="Sort files">
+                                <option value="newest">Newest first</option>
+                                <option value="oldest">Oldest first</option>
+                                <option value="name">Name A–Z</option>
+                                <option value="size">Largest first</option>
+                            </select>
+                        </label>
+                        <div class="view-switch" role="group" aria-label="Gallery layout">
+                            <button type="button" id="gridViewBtn" class="is-active" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+                            <button type="button" id="listViewBtn" aria-label="List view" aria-pressed="false" title="List view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h12M9 12h12M9 19h12"/><path d="M3 5h.01M3 12h.01M3 19h.01" stroke-linecap="round" stroke-width="3"/></svg></button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -114,7 +141,7 @@
                 <div class="loading-spinner"></div>
                 <span>Loading your files…</span>
             </div>
-            <div id="fileList" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div id="fileList" class="media-grid" aria-live="polite">
                 <!-- File cards will be injected here -->
             </div>
 
