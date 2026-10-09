@@ -44,8 +44,9 @@
                 <p class="text-gray-400 mt-2">Enter the access key to enter OB Transfer.</p>
             </div>
             <form id="authForm" class="space-y-4">
-                <input type="password" id="accessKey" placeholder="••••••••" class="w-full bg-black/40 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00ff9c] focus:ring-1 focus:ring-[#00ff9c] outline-none transition-all placeholder:text-gray-600">
-                <button type="submit" class="w-full bg-[#00ff9c] text-black font-bold py-4 rounded-xl hover:bg-[#00ff9c]/90 active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(0,255,156,0.3)]">Decrypt Access</button>
+                <label for="accessKey" class="sr-only">Access password</label>
+                <input type="password" id="accessKey" autocomplete="current-password" placeholder="Enter access password" class="w-full bg-black/40 border border-white/10 rounded-xl px-5 py-4 focus:border-[#00ff9c] focus:ring-1 focus:ring-[#00ff9c] outline-none transition-all placeholder:text-gray-600">
+                <button id="authSubmitBtn" type="submit" class="w-full bg-[#00ff9c] text-black font-bold py-4 rounded-xl hover:bg-[#00ff9c]/90 active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(0,255,156,0.3)] disabled:opacity-60 disabled:cursor-not-allowed"><span class="auth-submit-label">Enter OB Transfer</span></button>
             </form>
             <p id="authError" class="text-red-400 text-sm mt-4 text-center hidden">Access denied. Verification failed.</p>
         </div>
@@ -61,7 +62,7 @@
             </div>
             <div class="flex flex-col justify-center translate-y-0.5">
                 <h1 class="text-lg font-black tracking-tighter leading-none mb-0.5">OB Transfer</h1>
-                <span class="text-[7px] text-gray-500 font-mono tracking-[0.15em] uppercase leading-none">by bibekbista with Oli production</span>
+                <span class="text-[7px] text-gray-500 font-mono tracking-[0.15em] uppercase leading-none">Secure file transfer</span>
             </div>
         </div>
         
@@ -83,21 +84,37 @@
     <main class="pb-32">
         <!-- View: Explorer (Default) -->
         <div id="view-explorer" class="view-panel transition-all duration-500 px-6 pt-8">
-            <div class="mb-8 flex items-center justify-between">
-                <div>
-                    <h2 class="text-3xl font-bold tracking-tight uppercase">Dashboard</h2>
-                    <p class="text-gray-500 text-xs mt-1">Real-time node synchronization.</p>
-                </div>
-                <div class="flex items-center gap-2">
-                    <button class="p-2 bg-white/5 rounded-xl border border-white/10 text-gray-400">
+            <div class="mb-7">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <p class="section-kicker">Your files</p>
+                        <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Explorer</h2>
+                        <p class="text-gray-500 text-xs mt-1">Browse, preview and download your transferred files.</p>
+                    </div>
+                    <button id="refreshBtn" type="button" aria-label="Refresh files" title="Refresh files" class="icon-button">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                         </svg>
                     </button>
                 </div>
+                <div class="explorer-tools mt-6">
+                    <label class="search-box" for="fileSearch">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35m2.1-5.15a7.25 7.25 0 1 1-14.5 0 7.25 7.25 0 0 1 14.5 0Z" /></svg>
+                        <input id="fileSearch" type="search" placeholder="Search files..." autocomplete="off" aria-label="Search files">
+                    </label>
+                    <div class="stats-strip" aria-label="Storage summary">
+                        <span><strong id="fileCount">0</strong> files</span>
+                        <span class="stats-dot"></span>
+                        <span><strong id="storageUsed">0 B</strong> stored</span>
+                    </div>
+                </div>
             </div>
 
-            <div id="fileList" class="grid grid-cols-1 gap-4">
+            <div id="fileLoading" class="loading-state hidden" aria-live="polite">
+                <div class="loading-spinner"></div>
+                <span>Loading your files…</span>
+            </div>
+            <div id="fileList" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <!-- File cards will be injected here -->
             </div>
 
@@ -110,7 +127,7 @@
                 </div>
                 <div>
                     <h3 class="text-xl font-bold">No Records Found</h3>
-                    <p class="text-gray-500 max-w-[200px] mx-auto mt-2 text-xs">The OB Transfer@ core is empty. Deploy assets to start.</p>
+                    <p class="text-gray-500 max-w-[280px] mx-auto mt-2 text-xs leading-relaxed">Your transfer library is empty. Add a file to get started.</p>
                 </div>
             </div>
         </div>
@@ -165,7 +182,7 @@
 
     <!-- FAB -->
     <div class="fixed bottom-24 right-6 z-40">
-        <button id="fabBtn" class="w-16 h-16 bg-[#00ff9c] text-black rounded-2xl flex items-center justify-center shadow-[0_10px_30px_rgba(0,255,156,0.4)] active:scale-90 transition-all border-4 border-[#0a0f1c]">
+        <button id="fabBtn" aria-label="Upload files" title="Upload files" class="w-16 h-16 bg-[#00ff9c] text-black rounded-2xl flex items-center justify-center shadow-[0_10px_30px_rgba(0,255,156,0.4)] active:scale-90 transition-all border-4 border-[#0a0f1c]">
             <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4" />
             </svg>
@@ -175,7 +192,7 @@
 
     <!-- Bottom Navigation -->
     <nav class="fixed bottom-0 left-0 right-0 z-50 bg-[#0a0f1c]/90 backdrop-blur-2xl border-t border-white/5 px-8 pt-4 pb-8 flex items-center justify-around">
-        <button id="nav-explorer" class="nav-item group flex flex-col items-center gap-1.5 text-[#00ff9c]">
+        <button id="nav-explorer" type="button" aria-label="Open explorer" class="nav-item group flex flex-col items-center gap-1.5 text-[#00ff9c]">
             <div class="nav-icon relative">
                 <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 p-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
@@ -187,7 +204,7 @@
         
         <div class="w-16"></div> <!-- Spacer for FAB -->
 
-        <button id="nav-transfers" class="nav-item group flex flex-col items-center gap-1.5 text-gray-500">
+        <button id="nav-transfers" type="button" aria-label="Open transfers" class="nav-item group flex flex-col items-center gap-1.5 text-gray-500">
             <div class="nav-icon relative">
                 <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 p-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -208,7 +225,7 @@
                 <div id="mediaContainer" class="w-full h-full flex items-center justify-center">
                     <!-- Media element injected here -->
                 </div>
-                <button id="closeModalBtn" class="absolute top-6 left-6 p-3 bg-black/40 hover:bg-black/60 rounded-2xl border border-white/10 transition-all md:opacity-0 md:group-hover/modal:opacity-100">
+                <button id="closeModalBtn" type="button" aria-label="Close preview" title="Close preview" class="absolute top-6 left-6 p-3 bg-black/40 hover:bg-black/60 rounded-2xl border border-white/10 transition-all md:opacity-0 md:group-hover/modal:opacity-100">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>

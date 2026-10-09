@@ -2,7 +2,7 @@
 
 OB Transfer is a self-hosted file transfer and media streaming application built for private, authenticated file sharing. It provides a browser-based interface for uploading, browsing, previewing, downloading, and deleting files while enforcing server-side authentication, storage limits, safe file handling, protected realtime events, and browser security controls.
 
-> **Project status:** Security hardening and architecture work are being completed incrementally. This repository is currently at **Phase 19 of 20** in the project hardening roadmap.
+> **Project status:** Security hardening and architecture work are being completed incrementally. This repository is currently at **Phase 21 frontend UX refinement** in the project hardening roadmap.
 
 ## Features
 
@@ -107,6 +107,12 @@ Set `NODE_ENV=production` and use an HTTPS `APP_URL` when deploying behind TLS.
 | `LOG_LEVEL` | No | `info` | Fastify/Pino log level. |
 
 ## Production hardening
+## Final security audit
+
+Phase 20 completes the cumulative security review. The final audit re-checks authentication and session handling, API authorization, Socket.IO origin/authentication, CSP and security headers, CORS, XSS-sensitive DOM paths, upload and filesystem validation, storage quotas and concurrency, range streaming, SQLite metadata integrity, login abuse protection, environment/secrets handling, runtime Git exclusions, production startup/shutdown, project identity, and regression coverage.
+
+The final regression suite is available through `npm test` and includes a startup regression check preventing duplicate `isProduction` declarations in `start()`.
+
 
 Production startup fails closed when critical configuration is unsafe. With `NODE_ENV=production`, OB Transfer requires:
 
@@ -389,3 +395,10 @@ See [`SECURITY.md`](SECURITY.md) for the project's security-reporting policy.
 ## License
 
 No open-source license is declared in this repository yet. Until a license is added, assume the code is not licensed for unrestricted redistribution or commercial use.
+
+
+## Phase 21 — Frontend UX refinement
+
+The frontend received a usability-focused pass without changing the authenticated API contract. Improvements include responsive explorer cards, file search, storage/file summary, refresh feedback, clearer authentication controls, keyboard-accessible file previews, reduced-motion support, cleaner branding, and a fix for duplicate upload dispatch in the queue processor.
+
+For local development, the included `.env` uses `ACCESS_PASSWORD=bibekbista` as requested. Production configuration still requires a strong password and HTTPS.

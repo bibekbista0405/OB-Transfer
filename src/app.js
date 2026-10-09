@@ -9,6 +9,8 @@ import { state } from './modules/state.js';
 import { el } from './modules/dom.js';
 import { api } from './modules/api.js';
 
+const ui = { search: '', authBusy: false };
+
 // --- Initialization ---
 function init() {
     setupEventListeners();
@@ -39,6 +41,13 @@ async function handleLogin(e) {
     if (e) e.preventDefault();
     const password = el.accessKey.value;
     el.authError.classList.add('hidden');
+    if (!password) {
+        el.authError.textContent = 'Enter the access password.';
+        el.authError.classList.remove('hidden');
+        el.accessKey.focus();
+        return;
+    }
+    setAuthBusy(true);
 
     try {
         const response = await api.login(password);
@@ -58,7 +67,18 @@ async function handleLogin(e) {
         }
     } catch (err) {
         showToast('SYSTEM ERROR', 'Authentication server unreachable.', 'error');
+    } finally {
+        setAuthBusy(false);
     }
+}
+
+function setAuthBusy(busy) {
+    ui.authBusy = busy;
+    const button = document.getElementById('authSubmitBtn');
+    if (!button) return;
+    button.disabled = busy;
+    const label = button.querySelector('.auth-submit-label');
+    if (label) label.textContent = busy ? 'Verifying…' : 'Enter OB Transfer';
 }
 
 // --- Socket.IO ---
@@ -124,6 +144,7 @@ function switchView(view) {
 }
 
 async function fetchFiles() {
+    el.fileLoading?.classList.remove('hidden');
     try {
         const res = await api.files();
         
@@ -137,12 +158,19 @@ async function fetchFiles() {
     } catch (err) {
         console.error('Failed to fetch files:', err);
         showToast('NETWORK ERROR', 'Could not sync with central cluster.', 'error');
+    } finally {
+        el.fileLoading?.classList.add('hidden');
     }
 }
 
 function renderFileList() {
     el.fileList.innerHTML = '';
     
+    const count = document.getElementById('fileCount');
+    const storage = document.getElementById('storageUsed');
+    if (count) count.textContent = state.files.length.toLocaleString();
+    if (storage) storage.textContent = formatBytes(state.files.reduce((total, file) => total + Number(file.fileSize || 0), 0));
+
     if (state.files.length === 0) {
         el.emptyState.classList.remove('hidden');
         return;
@@ -150,15 +178,32 @@ function renderFileList() {
         el.emptyState.classList.add('hidden');
     }
 
-    state.files.forEach(file => {
+    const query = ui.search.trim().toLowerCase();
+    const visibleFiles = query
+        ? state.files.filter(file => String(file.originalName || '').toLowerCase().includes(query) || String(file.extension || '').toLowerCase().includes(query))
+        : state.files;
+
+    if (visibleFiles.length === 0) {
+        el.emptyState.classList.remove('hidden');
+        el.emptyState.querySelector('h3').textContent = query ? 'No Matches' : 'No Files Yet';
+        el.emptyState.querySelector('p').textContent = query ? 'Try a different filename or extension.' : 'Your transfer library is empty. Add a file to get started.';
+        return;
+    }
+
+    el.emptyState.classList.add('hidden');
+    visibleFiles.forEach(file => {
         const card = createFileCard(file);
         el.fileList.appendChild(card);
     });
+
 }
 
 function createFileCard(file) {
     const div = document.createElement('div');
-    div.className = 'mobile-card flex items-center gap-4 group cursor-pointer active:scale-95 transition-all';
+    div.className = 'mobile-card flex items-center gap-4 group cursor-pointer active:scale-[0.99] transition-all';
+    div.tabIndex = 0;
+    div.setAttribute('role', 'button');
+    div.setAttribute('aria-label', `Preview ${file.originalName || 'file'}`);
 
     const ext = (file.extension || 'bin').replace('.', '');
     const dateStr = new Date(file.uploadDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -192,7 +237,11 @@ function createFileCard(file) {
     arrow.className = 'p-2 text-gray-700';
     arrow.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>';
     div.append(iconWrap, content, arrow);
-    div.addEventListener('click', () => openPreview(file));
+    const open = () => openPreview(file);
+    div.addEventListener('click', open);
+    div.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+    });
     return div;
 }
 
@@ -203,7 +252,7 @@ function addToQueue(files) {
             return;
         }
 
-        const id = Math.random().toString(36).substr(2, 9);
+        const id = crypto.randomUUID();
         const queueItem = {
             id,
             file,
@@ -839,6 +888,21 @@ function setupEventListeners() {
     
     el.navExplorer.addEventListener('click', () => switchView('explorer'));
     el.navTransfers.addEventListener('click', () => switchView('transfers'));
+
+    const search = document.getElementById('fileSearch');
+    search?.addEventListener('input', (event) => {
+        ui.search = event.target.value;
+        renderFileList();
+    });
+
+    const refresh = document.getElementById('refreshBtn');
+    refresh?.addEventListener('click', async () => {
+        refresh.disabled = true;
+        refresh.classList.add('is-spinning');
+        await fetchFiles();
+        refresh.disabled = false;
+        refresh.classList.remove('is-spinning');
+    });
 
     el.fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {

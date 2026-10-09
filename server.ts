@@ -356,7 +356,6 @@ async function start() {
   const configuredUrl = new URL(configuredAppUrl);
   const configuredOrigin = configuredUrl.origin;
   const websocketOrigin = `${configuredUrl.protocol === 'https:' ? 'wss:' : 'ws:'}//${configuredUrl.host}`;
-  const isProduction = process.env.NODE_ENV === 'production';
   const allowedOrigins = new Set([configuredOrigin]);
   if (!isProduction) {
     // Development commonly switches between localhost and 127.0.0.1.

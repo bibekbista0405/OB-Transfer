@@ -3,6 +3,7 @@ export const el = {
     fileInput: document.getElementById('fileInput'),
     uploadQueue: document.getElementById('uploadQueue'),
     fileList: document.getElementById('fileList'),
+    fileLoading: document.getElementById('fileLoading'),
     emptyState: document.getElementById('emptyState'),
     socketStatus: document.getElementById('socketStatus'),
     socketText: document.getElementById('socketText'),

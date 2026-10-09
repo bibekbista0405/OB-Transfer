@@ -39,10 +39,14 @@ check('health endpoint is available without API authentication', /app\.get\('\/h
 check('graceful shutdown handles process signals', /process\.once\('SIGINT'/.test(server) && /process\.once\('SIGTERM'/.test(server) && /await app\.close\(\)/.test(server));
 check('database and realtime resources close during shutdown', /db\?\.close\(\)/.test(server) && /io\.disconnectSockets\(true\)/.test(server));
 check('production startup uses configured port', /const PORT = runtime\.port/.test(server));
+check('startup has no duplicate isProduction declaration', (() => {
+  const startBlock = server.slice(server.indexOf('async function start()'));
+  return (startBlock.match(/const isProduction = process\.env\.NODE_ENV === 'production';/g) || []).length === 1;
+})());
 
 for (const file of ['src/app.js', 'src/modules/api.js', 'src/modules/constants.js', 'src/modules/dom.js', 'src/modules/state.js']) {
   execFileSync(process.execPath, ['--check', path.join(root, file)], { stdio: 'pipe' });
   console.log(`PASS  JavaScript syntax: ${file}`);
 }
 
-console.log('\nAll Phase 19 production-hardening regression checks passed.');
+console.log('\nAll Phase 20 final security audit regression checks passed.');
