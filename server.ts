@@ -362,12 +362,33 @@ async function start() {
     // Keep both loopback origins local-only; production remains exact-origin.
     if (configuredUrl.hostname === 'localhost') allowedOrigins.add(`${configuredUrl.protocol}//127.0.0.1:${configuredUrl.port}`);
     if (configuredUrl.hostname === '127.0.0.1') allowedOrigins.add(`${configuredUrl.protocol}//localhost:${configuredUrl.port}`);
+
+    // Optional exact origins for temporary HTTPS tunnels (e.g. ngrok). Never
+    // use wildcard origins; these entries are disabled in production.
+    for (const rawOrigin of (process.env.ADDITIONAL_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean)) {
+      try {
+        const parsedOrigin = new URL(rawOrigin);
+        if (!['http:', 'https:'].includes(parsedOrigin.protocol) || parsedOrigin.origin !== rawOrigin.replace(/\/$/, '')) continue;
+        allowedOrigins.add(parsedOrigin.origin);
+      } catch {
+        // Ignore malformed development-only optional origins.
+      }
+    }
   }
   const allowedOriginList = [...allowedOrigins];
   const websocketOrigins = [websocketOrigin];
   if (!isProduction) {
     if (configuredUrl.hostname === 'localhost') websocketOrigins.push(`ws://127.0.0.1:${configuredUrl.port}`);
     if (configuredUrl.hostname === '127.0.0.1') websocketOrigins.push(`ws://localhost:${configuredUrl.port}`);
+    for (const origin of allowedOrigins) {
+      if (origin === configuredOrigin) continue;
+      try {
+        const parsedOrigin = new URL(origin);
+        websocketOrigins.push(`${parsedOrigin.protocol === 'https:' ? 'wss:' : 'ws:'}//${parsedOrigin.host}`);
+      } catch {
+        // The allowlist was validated above; this is defensive.
+      }
+    }
   }
 
   // Browser security policy. Keep the policy explicit because the UI currently

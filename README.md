@@ -100,6 +100,8 @@ Set `NODE_ENV=production` and use an HTTPS `APP_URL` when deploying behind TLS.
 | --- | --- | --- | --- |
 | `ACCESS_PASSWORD` | Yes for protected access | — | Private password used for initial authentication. Never commit the real value. |
 | `APP_URL` | Recommended | `http://localhost:3000` | Exact browser origin permitted by CORS and Socket.IO. |
+| `NGROK_HOST` | Optional | empty | Exact ngrok hostname allowed by Vite in development, without a protocol. |
+| `ADDITIONAL_ALLOWED_ORIGINS` | Optional | empty | Comma-separated exact development origins for tunnels; ignored in production. |
 | `NODE_ENV` | No | `development` | Use `production` for production deployment. |
 | `MAX_FILE_SIZE_BYTES` | No | `10737418240` | Maximum size of one upload. Default: 10 GiB. |
 | `MAX_STORAGE_BYTES` | No | `53687091200` | Maximum total runtime storage. Default: 50 GiB. |
@@ -405,3 +407,8 @@ No open-source license is declared in this repository yet. Until a license is ad
 The frontend received a usability-focused pass without changing the authenticated API contract. Improvements include responsive explorer cards, file search, storage/file summary, refresh feedback, clearer authentication controls, keyboard-accessible file previews, reduced-motion support, cleaner branding, and a fix for duplicate upload dispatch in the queue processor.
 
 For local development, the included `.env` uses `ACCESS_PASSWORD=bibekbista` as requested. Production configuration still requires a strong password and HTTPS.
+
+
+### Temporary ngrok development access
+
+Vite intentionally does not allow arbitrary hosts. To use a tunnel, set `NGROK_HOST` to the exact hostname shown by ngrok (without `https://`) and set `ADDITIONAL_ALLOWED_ORIGINS` to its exact public origin (for example `https://your-name.ngrok-free.dev`). Restart the dev server after changing `.env`. These extra origins are honored only in development; production stays exact-origin. Do not set Vite `allowedHosts` to `true`.

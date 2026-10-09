@@ -65,4 +65,10 @@ check('upload concurrency slots are released once, including cancellation', /rel
 check('existing mobile video player controls and inline playback remain unchanged', /video\.controls = true;/.test(app) && /video\.playsInline = true;/.test(app) && /video\.preload = 'auto';/.test(app) && /video\.className = 'w-full h-full max-h-\[85vh\] object-contain';/.test(app));
 check('reduced-motion preference is respected', /prefers-reduced-motion: reduce/.test(css) && /prefers-reduced-motion: reduce/.test(app));
 
-console.log('\nAll Phase 22 security, UX, and regression checks passed.');
+
+check('Vite ngrok host is explicit and configurable, not unrestricted', /NGROK_HOST/.test(vite) && /allowedHosts/.test(vite) && !/allowedHosts:\s*true/.test(vite));
+check('configured ngrok origin is development-only and exact-match', /ADDITIONAL_ALLOWED_ORIGINS/.test(server) && /if \(!isProduction\)/.test(server) && /parsedOrigin\.origin/.test(server));
+check('ngrok WebSocket origin is added to CSP without wildcard', /websocketOrigins\.push\(`\$\{parsedOrigin\.protocol === 'https:' \? 'wss:' : 'ws:'\}/.test(server) && !/connectSrc:\s*\[[^\]]*['"]\*['"]/.test(server));
+check('requested ngrok host is configured for local development', /NGROK_HOST=bloomier-snazziest-lisandra\.ngrok-free\.dev/.test(env));
+
+console.log('\nAll Phase 23 security, UX, and regression checks passed.');
